@@ -262,11 +262,29 @@ void VRManager::Update()
 	m_vrHaptics.Update();
 
 	HandleEvents();
-	if (vr_window_width != m_curWindowWidth || vr_window_height != m_curWindowHeight)
+
+	int wantedWindowWidth = vr_window_width;
+	int wantedWindowHeight = vr_window_height;
+	if (m_usingWinlatorXR)
 	{
-		m_pGame->m_pRenderer->ChangeResolution(vr_window_width, vr_window_height, 32, 0, false);
-		m_curWindowWidth = vr_window_width;
-		m_curWindowHeight = vr_window_height;
+		// WinlatorXR grabs the whole X screen and splits it into the two eyes, so the game window must
+		// cover exactly that screen - a smaller window (e.g. after the in-game video options wrote a
+		// resolution back to the config) shows up as a misaligned, blurry crop in the headset.
+		int screenWidth = GetSystemMetrics(SM_CXSCREEN);
+		int screenHeight = GetSystemMetrics(SM_CYSCREEN);
+		if (screenWidth > 0 && screenHeight > 0)
+		{
+			wantedWindowWidth = screenWidth;
+			wantedWindowHeight = screenHeight;
+		}
+	}
+	if (wantedWindowWidth != m_curWindowWidth || wantedWindowHeight != m_curWindowHeight)
+	{
+		if (m_usingWinlatorXR)
+			CryLogAlways("[WinlatorXR] sizing game window to the X screen: %d x %d", wantedWindowWidth, wantedWindowHeight);
+		m_pGame->m_pRenderer->ChangeResolution(wantedWindowWidth, wantedWindowHeight, 32, 0, false);
+		m_curWindowWidth = wantedWindowWidth;
+		m_curWindowHeight = wantedWindowHeight;
 	}
 }
 
