@@ -14,6 +14,7 @@
 #include "WeaponClass.h"
 #include "XVehicle.h"
 #include "WinlatorXR.h"
+#include "Hooks.h"
 #include <tlhelp32.h>
 #include <stdlib.h>
 
@@ -107,11 +108,30 @@ static vr::HmdMatrix34_t HmdMatrixFromQuatPos(float qx, float qy, float qz, floa
 // the modern CRT called abort() (uncaught C++ exception, invalid parameter, pure virtual call ...).
 // That includes CryGame.dll itself and dxvk's d3d9.dll. Far Cry's own crash handler never sees those,
 // so log a module-resolved call stack before the CRT puts up its dialog.
+// Everything is additionally appended, unbuffered, to vr_crash.txt next to the executable: the game's
+// log is buffered and the process usually dies right after abort(), before that buffer is flushed.
+static void WriteCrashFile(const char* line)
+{
+	HANDLE file = CreateFileA("vr_crash.txt", FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (file == INVALID_HANDLE_VALUE)
+		return;
+	DWORD written = 0;
+	WriteFile(file, line, (DWORD)strlen(line), &written, nullptr);
+	WriteFile(file, "\r\n", 2, &written, nullptr);
+	FlushFileBuffers(file);
+	CloseHandle(file);
+}
+
 static void LogCallStack(const char* reason)
 {
 	void* frames[32];
 	USHORT count = CaptureStackBackTrace(1, 32, frames, nullptr);
-	CryLogAlways("[WinlatorXR] %s - call stack (%u frames):", reason, (unsigned)count);
+	char line[512];
+	SYSTEMTIME st;
+	GetLocalTime(&st);
+	sprintf(line, "[%02d:%02d:%02d] [WinlatorXR] %s - call stack (%u frames):", st.wHour, st.wMinute, st.wSecond, reason, (unsigned)count);
+	CryLogAlways("%s", line);
+	WriteCrashFile(line);
 	for (USHORT i = 0; i < count; ++i)
 	{
 		HMODULE module = nullptr;
@@ -124,13 +144,15 @@ static void LogCallStack(const char* reason)
 		}
 		const char* shortName = strrchr(moduleName, '\\');
 		shortName = shortName ? shortName + 1 : moduleName;
-		CryLogAlways("  %2u) 0x%08X  %s+0x%X", (unsigned)i, (unsigned)(uintptr_t)frames[i], shortName, (unsigned)((uintptr_t)frames[i] - base));
+		sprintf(line, "  %2u) 0x%08X  %s+0x%X", (unsigned)i, (unsigned)(uintptr_t)frames[i], shortName, (unsigned)((uintptr_t)frames[i] - base));
+		CryLogAlways("%s", line);
+		WriteCrashFile(line);
 	}
 }
 
 static void OnCrtAbort(int)
 {
-	LogCallStack("abort() called - CRT runtime error");
+	LogCallStack("SIGABRT raised");
 }
 
 static void OnCrtInvalidParameter(const wchar_t*, const wchar_t*, const wchar_t*, unsigned int, uintptr_t)
@@ -143,12 +165,38 @@ static void OnCrtPureCall()
 	LogCallStack("pure virtual function call");
 }
 
+// abort() shows its "Runtime Error" box *before* raising SIGABRT, so hook the function itself to get
+// the stack first. There are two CRT instances in this process that can produce that box: ucrtbase
+// (CryGame.dll, dxvk d3d9.dll, ffmpeg, ...) and Wine's msvcrt (dsound.dll / dsoal-aldrv.dll).
+static void __cdecl Hook_AbortUcrt()
+{
+	LogCallStack("abort() called (ucrtbase)");
+	hooks::CallOriginal(Hook_AbortUcrt)();
+}
+
+static void __cdecl Hook_AbortMsvcrt()
+{
+	LogCallStack("abort() called (msvcrt)");
+	hooks::CallOriginal(Hook_AbortMsvcrt)();
+}
+
 static void InstallCrtDiagnostics()
 {
 	signal(SIGABRT, OnCrtAbort);
 	_set_invalid_parameter_handler(OnCrtInvalidParameter);
 	_set_purecall_handler(OnCrtPureCall);
-	CryLogAlways("[WinlatorXR] CRT abort/invalid-parameter/purecall diagnostics installed");
+
+	if (HMODULE ucrt = GetModuleHandleA("ucrtbase.dll"))
+	{
+		if (void* target = (void*)GetProcAddress(ucrt, "abort"))
+			hooks::InstallHook("ucrtbase!abort", target, (void*)&Hook_AbortUcrt);
+	}
+	if (HMODULE msvcrt = GetModuleHandleA("msvcrt.dll"))
+	{
+		if (void* target = (void*)GetProcAddress(msvcrt, "abort"))
+			hooks::InstallHook("msvcrt!abort", target, (void*)&Hook_AbortMsvcrt);
+	}
+	CryLogAlways("[WinlatorXR] CRT abort diagnostics installed (SIGABRT handler + abort hooks, stacks also go to vr_crash.txt)");
 }
 // ---------------------------------------------------------------------------------------------------
 
