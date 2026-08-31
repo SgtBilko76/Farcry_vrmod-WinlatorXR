@@ -201,13 +201,6 @@ public:
 	// Returns that horizontal render scale (1 or 2); the "logical" eye size is GetRenderSize().x / scale.
 	int WinlatorRenderScaleX() const { return (m_usingWinlatorXR && vr_winlatorxr_anamorphic != 0) ? 2 : 1; }
 
-	bool IsUsingWinlatorXR() const { return m_usingWinlatorXR; }
-	// The game renders the world into a single shared back buffer that is also the frame WinlatorXR
-	// grabs and splits into two eyes. If that back buffer were sized to one eye (GetRenderSize), the
-	// side-by-side composite would have to squeeze both eyes into it and each eye would lose half its
-	// width. So the back buffer is kept at the full X screen; the eyes are still captured at eye size.
-	vector2di GetWinlatorBackbufferSize() const;
-
 	// Alternate-eye rendering (WinlatorXR mode3d=2): every frame carries ONE eye at the full frame
 	// resolution and WinlatorXR keeps a framebuffer + pose per eye. Doubles per-eye pixels compared
 	// to side-by-side and halves the render work per frame, at the cost of each eye updating at half
