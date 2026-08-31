@@ -449,13 +449,16 @@ void VRManager::CaptureEye(int eye)
 	}
 
 	// acquire and copy the current swap chain buffer to the eye texture. Under WinlatorXR the back
-	// buffer is the full X screen while the eye texture is one eye, so this is a downscale and must be
-	// filtered (POINT would alias badly); the SteamVR path is a 1:1 copy where POINT is fine.
+	// buffer is the full X screen but the engine only renders the eye into the top-left GetRenderSize
+	// region of it, so copy just that region (a full-buffer copy would grab the unrendered rest and
+	// show the scene shrunk into a corner - a picture-in-picture).
 	ComPtr<IDirect3DSurface9> backBuffer;
 	m_d3d->device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, backBuffer.GetAddressOf());
 	ComPtr<IDirect3DSurface9> texSurface;
 	m_d3d->eyeTextures[eye]->GetSurfaceLevel(0, texSurface.GetAddressOf());
-	HRESULT hr = m_d3d->device->StretchRect(backBuffer.Get(), nullptr, texSurface.Get(), nullptr, m_usingWinlatorXR ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+	vector2di rs = GetRenderSize();
+	RECT srcRect = { 0, 0, rs.x, rs.y };
+	HRESULT hr = m_d3d->device->StretchRect(backBuffer.Get(), m_usingWinlatorXR ? &srcRect : nullptr, texSurface.Get(), nullptr, D3DTEXF_POINT);
 	if (hr != S_OK)
 	{
 		CryLogAlways("ERROR: Capturing HUD failed: %i", hr);
@@ -534,12 +537,14 @@ void VRManager::CaptureHUD()
 			return;
 	}
 
-	// acquire and copy the current back buffer to the HUD texture
+	// acquire and copy the current back buffer to the HUD texture (only the rendered region, as CaptureEye)
 	ComPtr<IDirect3DSurface9> backBuffer;
 	m_d3d->device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, backBuffer.GetAddressOf());
 	ComPtr<IDirect3DSurface9> texSurface;
 	m_d3d->hudTexture->GetSurfaceLevel(0, texSurface.GetAddressOf());
-	HRESULT hr = m_d3d->device->StretchRect(backBuffer.Get(), nullptr, texSurface.Get(), nullptr, m_usingWinlatorXR ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+	vector2di rsHud = GetRenderSize();
+	RECT srcRectHud = { 0, 0, rsHud.x, rsHud.y };
+	HRESULT hr = m_d3d->device->StretchRect(backBuffer.Get(), m_usingWinlatorXR ? &srcRectHud : nullptr, texSurface.Get(), nullptr, D3DTEXF_POINT);
 	if (hr != S_OK)
 	{
 		CryLogAlways("ERROR: Capturing HUD failed: %i", hr);
@@ -758,8 +763,13 @@ vector2di VRManager::GetRenderSize() const
 		// follows the reported FOV aspect, same as the OpenVR path below.
 		int height = max(vr_winlatorxr_render_height, 240);
 		int width = (int)(height * m_horizontalFov / m_verticalFov);
-		// see WinlatorRenderScaleX(): horizontally oversampled so the side-by-side squeeze is lossless
-		return vector2di(width * WinlatorRenderScaleX(), height);
+		// The engine renders the eye into the top-left of the full-screen back buffer, so the eye must
+		// fit inside it (an eye taller/wider than the screen would be clipped). Clamp to the screen and
+		// let AER use the full frame while SBS uses one eye's worth.
+		vector2di backbuffer = GetWinlatorBackbufferSize();
+		if (width > backbuffer.x) { height = height * backbuffer.x / width; width = backbuffer.x; }
+		if (height > backbuffer.y) { width = width * backbuffer.y / height; height = backbuffer.y; }
+		return vector2di(width, height);
 	}
 
 	uint32_t width, height;
