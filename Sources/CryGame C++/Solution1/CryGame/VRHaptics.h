@@ -21,8 +21,17 @@ struct ActiveHapticEffect
 class VRHaptics
 {
 public:
+	// full initialisation: controller vibration + bHaptics vest + ProTubeVR (SteamVR/PC)
 	void Init(CXGame* game, VRInput* vrInput);
+	// controller vibration only (WinlatorXR on a standalone headset - no vest/ProTube there)
+	void InitControllerHaptics(CXGame* game, VRInput* vrInput);
 	void Update();
+
+	// Gameplay/Lua code calls into this class freely (e.g. weapon scripts register bHaptics effects
+	// during level load), so every entry point must bail out gracefully when the corresponding
+	// subsystem was never initialised.
+	bool IsInitialized() const { return m_pGame != nullptr && m_vrInput != nullptr; }
+	bool AreExternalHapticsReady() const { return m_externalHapticsReady; }
 
 	void RegisterBHapticsEffect(const char* key, const char* file);
 
@@ -45,6 +54,7 @@ private:
 
 	CXGame* m_pGame = nullptr;
 	VRInput* m_vrInput = nullptr;
+	bool m_externalHapticsReady = false;
 
 	std::map<std::string, HapticEffect> m_effects;
 	std::vector<ActiveHapticEffect> m_activeEffects[2];

@@ -86,9 +86,17 @@ void VRRenderer::Render(ISystem* pSystem)
 		player->UpdateVRTransformsPreRender();
 	}
 
-	for (int eye = 0; eye < 2; ++eye)
+	if (gVR->UseWinlatorAER())
 	{
-		RenderSingleEye(eye, pSystem);
+		// alternate-eye rendering: only the eye this frame carries (see VRManager::ComposeWinlatorXRFrame)
+		RenderSingleEye(gVR->CurrentAerEye(), pSystem);
+	}
+	else
+	{
+		for (int eye = 0; eye < 2; ++eye)
+		{
+			RenderSingleEye(eye, pSystem);
+		}
 	}
 
 	vector2di renderSize = gVR->GetRenderSize();

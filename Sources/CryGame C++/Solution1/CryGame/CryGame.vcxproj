@@ -469,6 +469,7 @@
     <ClCompile Include="VRHaptics.cpp" />
     <ClCompile Include="VRInput.cpp" />
     <ClCompile Include="VRManager.cpp" />
+    <ClCompile Include="WinlatorXR.cpp" />
     <ClCompile Include="VRRenderer.cpp" />
     <ClCompile Include="WeaponClass.cpp" />
     <ClCompile Include="WeaponSystemEx.cpp" />
@@ -692,6 +693,7 @@
     <ClInclude Include="VRHaptics.h" />
     <ClInclude Include="VRInput.h" />
     <ClInclude Include="VRManager.h" />
+    <ClInclude Include="WinlatorXR.h" />
     <ClInclude Include="VRRenderer.h" />
     <ClInclude Include="WeaponClass.h" />
     <ClInclude Include="WeaponSystemEx.h" />

@@ -75,6 +75,9 @@ private:
 	CXGame* m_pGame;
 	bool m_initialized = false;
 	bool m_inputReady = false;
+	// true if we detected WinlatorXR (Quest/Pico Wine layer) and are using its XrAPI UDP protocol
+	// instead of OpenVR/SteamVR. See WinlatorXR.h.
+	bool m_usingWinlatorXR = false;
 	D3DResources* m_d3d = nullptr;
 	vr::TrackedDevicePose_t m_headPose;
 	vr::VROverlayHandle_t m_hudOverlay;
@@ -100,6 +103,54 @@ private:
 
 	void PrepareTextureForSubmission(IDirect3DTexture9* tex, vr::VRVulkanTextureData_t& vrTexData, VkImageLayout& origLayout);
 	void PostSubmissionTransitionTexture(IDirect3DTexture9* tex, VkImageLayout origLayout);
+
+	// Pulls the latest WinlatorXR packet and converts it into m_headPose (OpenVR pose format), so the
+	// rest of the pose pipeline (UpdateHmdTransform, RecalibrateView, ...) is backend-agnostic.
+	void UpdateWinlatorXRPose();
+	// Eye-to-head transform (already converted to Far Cry space) for either backend.
+	Matrix34 GetEyeToHeadTransform(int eye);
+	// distance between the eyes as reported by WinlatorXR, in metres
+	float m_winlatorEyeSeparation = 0.064f;
+	bool m_winlatorPoseLogged = false;
+	// HMD_SYNC id of the packet whose pose was used for the current frame; painted into the frame-sync
+	// pixel so WinlatorXR can pick the matching pose when it reprojects our image (see ComposeWinlatorXRFrame)
+	int m_winlatorFrameSync = 0;
+	// what we tell WinlatorXR to do with the frame we just composed (see WinlatorXR::SendState)
+	int m_winlatorModeVr = 2;
+	int m_winlatorMode3d = 0;
+	// WinlatorXR poses live in OpenXR LOCAL space (origin = headset at session start, not the floor).
+	// Protocol 0.5 also reports the head's height above the floor, from which we derive this offset
+	// to lift all poses (head and controllers) into a floor-relative frame like SteamVR's standing space.
+	float m_winlatorFloorOffset = 0.f;
+	bool m_winlatorFloorOffsetValid = false;
+	// true once RecalibrateView() has run on a valid pose (don't use the sign of m_referenceHeight as
+	// a sentinel for this: in LOCAL space the head can legitimately be below the origin)
+	bool m_referenceCalibrated = false;
+
+public:
+	// y offset (metres) to add to any raw WinlatorXR pose position to make it floor-relative
+	float GetWinlatorFloorOffset() const { return m_winlatorFloorOffsetValid ? m_winlatorFloorOffset : 0.f; }
+private:
+
+	// WinlatorXR has no compositor API: it just grabs the game window. So instead of submitting eye
+	// textures we compose the final side-by-side (or flat) frame into the back buffer ourselves.
+	void ComposeWinlatorXRFrame();
+	void DrawTexturedQuad(IDirect3DTexture9* texture, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, bool alphaBlend);
+	// draws the captured HUD for 'eye' into the frame region [x0, x0+width) x [0, height)
+	void DrawHud(int eye, int x0, int width, int height);
+	int m_winlatorAerEye = 0;
+
+	// WinlatorXR unconditionally emulates a mouse/keyboard from the controllers (trigger = left click,
+	// grip = right click, thumbstick up/down = mouse wheel, menu button = Esc, ...). Those events reach
+	// the game in addition to our own XrAPI-driven input, and the mouse wheel even crashes Far Cry's
+	// window procedure under Wine. So: subclass the game window to drop wheel messages, and disable
+	// keyboard/mouse gameplay actions while motion controls are in charge.
+	void InstallWinlatorXRWindowHook(IDirect3DDevice9Ex* device);
+	void UpdateDesktopInputBlock();
+	bool m_desktopInputBlocked = false;
+
+	// calibrated standing head height minus the user's vr_height_offset (see there)
+	float GetEffectiveReferenceHeight() const { return m_referenceHeight - vr_height_offset; }
 
 public:
 	// VR-specific cvars
@@ -127,6 +178,9 @@ public:
 	float vr_binocular_size;
 	float vr_scope_size;
 	int vr_seated_mode;
+	// extra metres added to the player's in-game eye height (positive = taller). Applied to the
+	// calibrated reference height, so physical crouching/leaning keep working unchanged.
+	float vr_height_offset;
 	int vr_cutscenes_cinema_mode;
 	int vr_vehicles_cinema_mode;
 	float vr_hud_distance;
@@ -135,6 +189,25 @@ public:
 	float vr_menu_width;
 	int vr_skip_vehicle_transitions;
 	int vr_decouple_vehicle_rotations;
+	int vr_winlatorxr_render_height;
+	int vr_winlatorxr_block_desktop_input;
+	int vr_winlatorxr_anamorphic;
+
+	// Under WinlatorXR the final frame is side-by-side in a back buffer that is also the engine's
+	// render target, so a plain composite halves the horizontal resolution of each eye. With
+	// vr_winlatorxr_anamorphic the engine renders each eye 2x wider (same FOV, i.e. horizontally
+	// oversampled) and the squeeze into the half-frame brings it back to full per-eye detail.
+	// Returns that horizontal render scale (1 or 2); the "logical" eye size is GetRenderSize().x / scale.
+	int WinlatorRenderScaleX() const { return (m_usingWinlatorXR && vr_winlatorxr_anamorphic != 0) ? 2 : 1; }
+
+	// Alternate-eye rendering (WinlatorXR mode3d=2): every frame carries ONE eye at the full frame
+	// resolution and WinlatorXR keeps a framebuffer + pose per eye. Doubles per-eye pixels compared
+	// to side-by-side and halves the render work per frame, at the cost of each eye updating at half
+	// the frame rate.
+	int vr_winlatorxr_aer;
+	bool UseWinlatorAER() const { return m_usingWinlatorXR && vr_winlatorxr_aer != 0; }
+	// which eye the current frame renders/carries in AER mode (0 = left, 1 = right)
+	int CurrentAerEye() const { return m_winlatorAerEye; }
 	ICVar* vr_debug_override_rh_offset = nullptr;
 	ICVar* vr_debug_override_rh_angles = nullptr;
 	ICVar* vr_debug_override_lh_offset = nullptr;

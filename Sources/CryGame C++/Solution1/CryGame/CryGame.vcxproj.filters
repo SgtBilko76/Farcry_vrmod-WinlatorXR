@@ -396,6 +396,9 @@
     <ClCompile Include="VRManager.cpp">
       <Filter>Source Files\VR</Filter>
     </ClCompile>
+    <ClCompile Include="WinlatorXR.cpp">
+      <Filter>Source Files\VR</Filter>
+    </ClCompile>
     <ClCompile Include="VRRenderer.cpp">
       <Filter>Source Files\VR</Filter>
     </ClCompile>
@@ -1044,6 +1047,9 @@
       <Filter>Source Files\VR</Filter>
     </ClInclude>
     <ClInclude Include="VRManager.h">
+      <Filter>Source Files\VR</Filter>
+    </ClInclude>
+    <ClInclude Include="WinlatorXR.h">
       <Filter>Source Files\VR</Filter>
     </ClInclude>
     <ClInclude Include="VRRenderer.h">

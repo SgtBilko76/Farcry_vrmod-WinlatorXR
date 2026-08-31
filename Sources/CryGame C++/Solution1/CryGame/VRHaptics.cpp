@@ -10,16 +10,26 @@
 
 void VRHaptics::Init(CXGame* game, VRInput* vrInput)
 {
-	m_pGame = game;
-	m_vrInput = vrInput;
-	CryLogAlways("Initialised haptics.");
+	InitControllerHaptics(game, vrInput);
 	InitialiseSync("farcryvr", "Far Cry VR");
 	InitRifle();
+	m_externalHapticsReady = true;
+	CryLogAlways("Initialised bHaptics / ProTubeVR haptics.");
+}
+
+void VRHaptics::InitControllerHaptics(CXGame* game, VRInput* vrInput)
+{
+	m_pGame = game;
+	m_vrInput = vrInput;
+	CryLogAlways("Initialised controller haptics.");
 	InitEffects();
 }
 
 void VRHaptics::Update()
 {
+	if (!IsInitialized())
+		return;
+
 	float curTime = m_pGame->GetSystem()->GetITimer()->GetAsyncCurTime();
 	bool update = (m_nextUpdateTime <= curTime);
 
@@ -53,6 +63,9 @@ void VRHaptics::Update()
 
 void VRHaptics::RegisterBHapticsEffect(const char* key, const char* file)
 {
+	if (!AreExternalHapticsReady())
+		return;
+
 	if (IsFeedbackRegistered(key))
 	{
 		return;
@@ -95,34 +108,44 @@ void VRHaptics::TriggerEffect(int hand, const char* effectName, float amplitudeM
 
 void VRHaptics::TriggerBHapticsEffect(const char* key, float intensity, float offsetAngleX, float offsetY)
 {
+	if (!AreExternalHapticsReady())
+		return;
 	SubmitRegisteredWithOption(key, key, intensity, 1.0f, offsetAngleX, offsetY);
 }
 
 bool VRHaptics::IsBHapticsEffectPlaying(const char* key) const
 {
+	if (!AreExternalHapticsReady())
+		return false;
 	return IsPlayingKey(key);
 }
 
 void VRHaptics::StopBHapticsEffect(const char* key)
 {
+	if (!AreExternalHapticsReady())
+		return;
 	TurnOffKey(key);
 }
 
 void VRHaptics::StopEffects(int hand)
 {
 	m_activeEffects[hand].clear();
-	m_vrInput->TriggerHaptics(hand, 0, 0, 0);
+	if (m_vrInput)
+		m_vrInput->TriggerHaptics(hand, 0, 0, 0);
 }
 
 void VRHaptics::StopAllEffects()
 {
 	StopEffects(0);
 	StopEffects(1);
-	TurnOff();
+	if (AreExternalHapticsReady())
+		TurnOff();
 }
 
 void VRHaptics::ProtubeKick(float power, bool twoHanded)
 {
+	if (!AreExternalHapticsReady())
+		return;
 	uint8 pw = clamp_tpl(power, 0.f, 1.f) * 255;
 	ForceTubeVRChannel channel = twoHanded ? rifle : rifleButt;
 	KickChannel(pw, channel);
@@ -130,6 +153,8 @@ void VRHaptics::ProtubeKick(float power, bool twoHanded)
 
 void VRHaptics::ProtubeRumble(float power, float seconds, bool twoHanded)
 {
+	if (!AreExternalHapticsReady())
+		return;
 	uint8 pw = clamp_tpl(power, 0.f, 1.f) * 255;
 	ForceTubeVRChannel channel = twoHanded ? rifle : rifleButt;
 	RumbleChannel(pw, seconds, channel);
@@ -137,6 +162,8 @@ void VRHaptics::ProtubeRumble(float power, float seconds, bool twoHanded)
 
 void VRHaptics::ProtubeShot(float kickPower, float rumblePower, float rumbleSeconds, bool twoHanded)
 {
+	if (!AreExternalHapticsReady())
+		return;
 	uint8 kpw = clamp_tpl(kickPower, 0.f, 1.f) * 255;
 	uint8 rpw = clamp_tpl(rumblePower, 0.f, 1.f) * 255;
 	ForceTubeVRChannel channel = twoHanded ? rifle : rifleButt;

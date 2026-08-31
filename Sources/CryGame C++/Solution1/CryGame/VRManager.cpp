@@ -13,6 +13,8 @@
 #include "VRRenderer.h"
 #include "WeaponClass.h"
 #include "XVehicle.h"
+#include "WinlatorXR.h"
+#include <tlhelp32.h>
 
 
 HMODULE GetCurrentModule()
@@ -71,6 +73,27 @@ vr::HmdMatrix34_t FarCryToOpenVR(const Matrix34& mat)
 	return res;
 }
 
+// Builds an OpenVR-style device-to-absolute matrix from a unit quaternion and position that use the
+// OpenXR/OpenVR convention (x = right, y = up, -z = forward). Used to feed the WinlatorXR pose into the
+// same m_headPose structure the OpenVR path fills, so the rest of the pose pipeline stays shared.
+static vr::HmdMatrix34_t HmdMatrixFromQuatPos(float qx, float qy, float qz, float qw, float x, float y, float z)
+{
+	vr::HmdMatrix34_t m;
+	m.m[0][0] = 1.f - 2.f * (qy * qy + qz * qz);
+	m.m[0][1] = 2.f * (qx * qy - qw * qz);
+	m.m[0][2] = 2.f * (qx * qz + qw * qy);
+	m.m[0][3] = x;
+	m.m[1][0] = 2.f * (qx * qy + qw * qz);
+	m.m[1][1] = 1.f - 2.f * (qx * qx + qz * qz);
+	m.m[1][2] = 2.f * (qy * qz - qw * qx);
+	m.m[1][3] = y;
+	m.m[2][0] = 2.f * (qx * qz - qw * qy);
+	m.m[2][1] = 2.f * (qy * qz + qw * qx);
+	m.m[2][2] = 1.f - 2.f * (qx * qx + qy * qy);
+	m.m[2][3] = z;
+	return m;
+}
+
 struct VRManager::D3DResources
 {
 	ComPtr<IDirect3DDevice9Ex> device;
@@ -83,6 +106,9 @@ VRManager::VRManager()
 {
 	m_d3d = new D3DResources;
 	m_hmdTransform = Matrix34::CreateIdentity();
+	// start out with an explicitly invalid pose: the WinlatorXR path only fills this once the first
+	// packet has arrived, and ProcessInput checks bPoseIsValid before AwaitFrame has necessarily run
+	memset(&m_headPose, 0, sizeof(m_headPose));
 }
 
 
@@ -104,40 +130,86 @@ bool VRManager::Init(CXGame *game)
 
 	m_pGame = game;
 
-	vr::EVRInitError error;
-	vr::VR_Init(&error, vr::VRApplication_Scene);
-	if (error != vr::VRInitError_None)
+	m_usingWinlatorXR = WinlatorXR::IsLikelyPresent();
+
+	if (m_usingWinlatorXR)
 	{
-		CryError("Failed to initialize OpenVR: %s", vr::VR_GetVRInitErrorAsEnglishDescription(error));
-		return false;
+		// Running under WinlatorXR (Wine on a standalone Quest/Pico headset) - use its XrAPI UDP
+		// protocol instead of OpenVR/SteamVR, which isn't available in that environment.
+		// NOTE: this is currently a minimal, log-only integration (detection + packet parsing only).
+		// Pose/rendering/input/haptics wiring land in later changes; until then, VR behaves as if
+		// running in the existing "not initialized" flat/mono fallback mode.
+		CryLogAlways("Detected WinlatorXR environment (Z:\\ drive present) - using WinlatorXR XrAPI backend instead of OpenVR");
+		WinlatorXR::Init();
+
+		// Far Cry's crash handler can't attribute addresses to modules under Wine ("Exception Module:
+		// <Unknown>"), so dump the module map once - it makes the call stacks in log.txt readable.
+		HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, GetCurrentProcessId());
+		if (snapshot != INVALID_HANDLE_VALUE)
+		{
+			MODULEENTRY32 me;
+			me.dwSize = sizeof(me);
+			if (Module32First(snapshot, &me))
+			{
+				do
+				{
+					CryLogAlways("[WinlatorXR] module %-28s base 0x%08X size 0x%08X", me.szModule, (unsigned)(uintptr_t)me.modBaseAddr, (unsigned)me.modBaseSize);
+				} while (Module32Next(snapshot, &me));
+			}
+			CloseHandle(snapshot);
+		}
+
+		m_verticalFov = tanf(DEG2RAD(90.f) / 2.f);
+		m_horizontalFov = tanf(DEG2RAD(90.f) / 2.f);
+		m_vertRenderScale = 1.f;
 	}
+	else
+	{
+		vr::EVRInitError error;
+		vr::VR_Init(&error, vr::VRApplication_Scene);
+		if (error != vr::VRInitError_None)
+		{
+			CryError("Failed to initialize OpenVR: %s", vr::VR_GetVRInitErrorAsEnglishDescription(error));
+			return false;
+		}
 
-	vr::VRCompositor()->SetTrackingSpace(vr::TrackingUniverseStanding);
+		vr::VRCompositor()->SetTrackingSpace(vr::TrackingUniverseStanding);
 
-	vr::VROverlay()->CreateOverlay("FarCryHud", "FarCry HUD", &m_hudOverlay);
-	vr::VROverlay()->SetOverlaySortOrder(m_hudOverlay, 1);
-	vr::VROverlay()->CreateOverlay("FarCry3D", "FarCry 3D", &m_3DOverlay);
-	vr::VROverlay()->SetOverlayWidthInMeters(m_hudOverlay, 2.f);
-	vr::VROverlay()->ShowOverlay(m_hudOverlay);
+		vr::VROverlay()->CreateOverlay("FarCryHud", "FarCry HUD", &m_hudOverlay);
+		vr::VROverlay()->SetOverlaySortOrder(m_hudOverlay, 1);
+		vr::VROverlay()->CreateOverlay("FarCry3D", "FarCry 3D", &m_3DOverlay);
+		vr::VROverlay()->SetOverlayWidthInMeters(m_hudOverlay, 2.f);
+		vr::VROverlay()->ShowOverlay(m_hudOverlay);
 
-	vr::VROverlay()->CreateOverlay("FarCry3D", "FarCry 3D", &m_3DOverlay);
-	vr::VROverlay()->SetOverlayFlag(m_3DOverlay, vr::VROverlayFlags_SideBySide_Parallel, true);
-	vr::VROverlay()->HideOverlay(m_3DOverlay);
+		vr::VROverlay()->CreateOverlay("FarCry3D", "FarCry 3D", &m_3DOverlay);
+		vr::VROverlay()->SetOverlayFlag(m_3DOverlay, vr::VROverlayFlags_SideBySide_Parallel, true);
+		vr::VROverlay()->HideOverlay(m_3DOverlay);
 
-	float ll, lr, lt, lb, rl, rr, rt, rb;
-	vr::VRSystem()->GetProjectionRaw(vr::Eye_Left, &ll, &lr, &lt, &lb);
-	vr::VRSystem()->GetProjectionRaw(vr::Eye_Right, &rl, &rr, &rt, &rb);
-	CryLogAlways(" Left eye - l: %.2f  r: %.2f  t: %.2f  b: %.2f", ll, lr, lt, lb);
-	CryLogAlways("Right eye - l: %.2f  r: %.2f  t: %.2f  b: %.2f", rl, rr, rt, rb);
-	m_verticalFov = max(max(fabsf(lt), fabsf(lb)), max(fabsf(rt), fabsf(rb)));
-	m_horizontalFov = max(max(fabsf(ll), fabsf(lr)), max(fabsf(rl), fabsf(rr)));
-	m_vertRenderScale = 2.f * m_verticalFov / min(fabsf(lt) + fabsf(lb), fabsf(rt) + fabsf(rb));
-	CryLogAlways("VR vert fov: %.2f  horz fov: %.2f  vert scale: %.2f", m_verticalFov, m_horizontalFov, m_vertRenderScale);
+		float ll, lr, lt, lb, rl, rr, rt, rb;
+		vr::VRSystem()->GetProjectionRaw(vr::Eye_Left, &ll, &lr, &lt, &lb);
+		vr::VRSystem()->GetProjectionRaw(vr::Eye_Right, &rl, &rr, &rt, &rb);
+		CryLogAlways(" Left eye - l: %.2f  r: %.2f  t: %.2f  b: %.2f", ll, lr, lt, lb);
+		CryLogAlways("Right eye - l: %.2f  r: %.2f  t: %.2f  b: %.2f", rl, rr, rt, rb);
+		m_verticalFov = max(max(fabsf(lt), fabsf(lb)), max(fabsf(rt), fabsf(rb)));
+		m_horizontalFov = max(max(fabsf(ll), fabsf(lr)), max(fabsf(rl), fabsf(rr)));
+		m_vertRenderScale = 2.f * m_verticalFov / min(fabsf(lt) + fabsf(lb), fabsf(rt) + fabsf(rb));
+		CryLogAlways("VR vert fov: %.2f  horz fov: %.2f  vert scale: %.2f", m_verticalFov, m_horizontalFov, m_vertRenderScale);
+	}
 
 	RegisterCVars();
 
-	m_inputReady = m_input.Init(game);
-	m_vrHaptics.Init(game, &m_input);
+	if (m_usingWinlatorXR)
+	{
+		// controller input comes from the XrAPI packet; only controller vibration is available as
+		// haptics on a standalone headset (no bHaptics vest / ProTubeVR there)
+		m_inputReady = m_input.InitWinlatorXR(game);
+		m_vrHaptics.InitControllerHaptics(game, &m_input);
+	}
+	else
+	{
+		m_inputReady = m_input.Init(game);
+		m_vrHaptics.Init(game, &m_input);
+	}
 
 	m_hmdTransform = Matrix34::CreateIdentity();
 	m_referencePosition = Vec3(0, 0, 0);
@@ -156,8 +228,15 @@ void VRManager::Shutdown()
 	if (!m_initialized)
 		return;
 
-	vr::VROverlay()->DestroyOverlay(m_hudOverlay);
-	vr::VR_Shutdown();
+	if (m_usingWinlatorXR)
+	{
+		WinlatorXR::Shutdown();
+	}
+	else
+	{
+		vr::VROverlay()->DestroyOverlay(m_hudOverlay);
+		vr::VR_Shutdown();
+	}
 	m_initialized = false;
 }
 
@@ -166,7 +245,9 @@ void VRManager::Update()
 	if (!m_initialized)
 		return;
 
+	// (VRHaptics itself no-ops whatever wasn't initialised for the current backend)
 	m_vrHaptics.Update();
+
 	HandleEvents();
 	if (vr_window_width != m_curWindowWidth || vr_window_height != m_curWindowHeight)
 	{
@@ -181,15 +262,31 @@ void VRManager::AwaitFrame()
 	if (!m_initialized || !m_d3d->device)
 		return;
 
-	dxvkLockSubmissionQueue(m_d3d->device.Get(), false);
-	vr::VRCompositor()->WaitGetPoses(&m_headPose, 1, nullptr, 0);
-	dxvkReleaseSubmissionQueue(m_d3d->device.Get());
+	if (m_usingWinlatorXR)
+	{
+		// WinlatorXR has no blocking WaitGetPoses equivalent - it streams poses over UDP at the
+		// headset's refresh rate, so just pick up the most recent one for this frame
+		UpdateWinlatorXRPose();
+	}
+	else
+	{
+		dxvkLockSubmissionQueue(m_d3d->device.Get(), false);
+		vr::VRCompositor()->WaitGetPoses(&m_headPose, 1, nullptr, 0);
+		dxvkReleaseSubmissionQueue(m_d3d->device.Get());
+	}
 
 	UpdateHmdTransform();
 }
 
 void VRManager::HandleEvents()
 {
+	if (m_usingWinlatorXR)
+	{
+		// WinlatorXR has no event queue: there is no quit/dashboard/recenter notification to handle.
+		// (Poses are consumed in AwaitFrame via UpdateWinlatorXRPose.)
+		return;
+	}
+
 	vr::VREvent_t event;
 	while (vr::VRSystem()->PollNextEvent(&event, sizeof(vr::VREvent_t)))
 	{
@@ -331,6 +428,14 @@ void VRManager::CaptureHUD()
 
 void VRManager::MirrorEyeToBackBuffer()
 {
+	if (m_usingWinlatorXR)
+	{
+		// the back buffer *is* the headset image under WinlatorXR, so instead of a desktop mirror we
+		// compose the actual stereo frame here
+		ComposeWinlatorXRFrame();
+		return;
+	}
+
 	if (!gVRRenderer->ShouldRenderVR() || gVRRenderer->ShouldRender2D())
 		return;
 
@@ -415,7 +520,28 @@ void VRManager::SetDevice(IDirect3DDevice9Ex *device)
 
 void VRManager::FinishFrame()
 {
-	if (!m_initialized || !m_d3d->device || !m_d3d->eyeTextures[0] || !m_d3d->eyeTextures[1])
+	if (!m_initialized)
+		return;
+
+	if (m_usingWinlatorXR)
+	{
+		// the frame itself was already composed into the back buffer by ComposeWinlatorXRFrame (called
+		// from the pre-present hook); all that is left is telling WinlatorXR how to display it.
+		// fov 0/0 = "keep the headset's native FOV", which WinlatorXR then reports back to us in every
+		// packet and which is what our cameras render with (see UpdateWinlatorXRPose).
+		// controller vibration: WinlatorXR treats the values as a per-frame level (with its own decay),
+		// so just forward whatever amplitude VRHaptics last asked for
+		float lHaptics = m_inputReady ? m_input.GetWinlatorHapticAmplitude(0) : 0.f;
+		float rHaptics = m_inputReady ? m_input.GetWinlatorHapticAmplitude(1) : 0.f;
+		WinlatorXR::SendState(lHaptics, rHaptics, m_winlatorModeVr, m_winlatorMode3d, 0.f, 0.f);
+		m_wasBinocular = m_pGame->AreBinocularsActive();
+		// alternate-eye rendering: next frame renders and carries the other eye
+		if (UseWinlatorAER())
+			m_winlatorAerEye ^= 1;
+		return;
+	}
+
+	if (!m_d3d->device || !m_d3d->eyeTextures[0] || !m_d3d->eyeTextures[1])
 		return;
 
 	vr::VRVulkanTextureData_t vkTexData[4];
@@ -476,6 +602,17 @@ vector2di VRManager::GetRenderSize() const
 	if (!m_initialized)
 		return vector2di(1280, 800);
 
+	if (m_usingWinlatorXR)
+	{
+		// WinlatorXR doesn't report a recommended render target size, so the per-eye height is user
+		// configurable (Quest/Pico run the x86 game through Box64 - keep this modest) and the width
+		// follows the reported FOV aspect, same as the OpenVR path below.
+		int height = max(vr_winlatorxr_render_height, 240);
+		int width = (int)(height * m_horizontalFov / m_verticalFov);
+		// see WinlatorRenderScaleX(): horizontally oversampled so the side-by-side squeeze is lossless
+		return vector2di(width * WinlatorRenderScaleX(), height);
+	}
+
 	uint32_t width, height;
 	vr::VRSystem()->GetRecommendedRenderTargetSize(&width, &height);
 	height *= m_vertRenderScale;
@@ -491,8 +628,10 @@ void VRManager::ModifyViewCamera(int eye, CCamera& cam)
 		return;
 	}
 
-	if (!m_initialized)
+	if (!m_initialized || (m_usingWinlatorXR && !m_headPose.bPoseIsValid))
 	{
+		// no tracking available (yet): fall back to a simple flat stereo offset. Under WinlatorXR
+		// this covers the frames before the first UDP pose packet has arrived.
 		if (eye == 1)
 		{
 			Vec3 pos = cam.GetPos();
@@ -509,7 +648,7 @@ void VRManager::ModifyViewCamera(int eye, CCamera& cam)
 
 	Ang3 angles = cam.GetAngles();
 	Vec3 position = cam.GetPos();
-	position.z -= m_referenceHeight;
+	position.z -= GetEffectiveReferenceHeight();
 
 	CPlayer* player = m_pGame->GetLocalPlayer();
 	if (player && !m_pGame->IsCutSceneActive())
@@ -559,8 +698,7 @@ void VRManager::ModifyViewCamera(int eye, CCamera& cam)
 	Matrix34 viewMat;
 	viewMat.SetRotationXYZ(angles, position);
 
-	vr::HmdMatrix34_t eyeMatVR = vr::VRSystem()->GetEyeToHeadTransform(eye == 0 ? vr::Eye_Left : vr::Eye_Right);
-	Matrix34 eyeMat = OpenVRToFarCry(eyeMatVR);
+	Matrix34 eyeMat = GetEyeToHeadTransform(eye);
 	Matrix34 headMat = m_hmdTransform;
 	viewMat = viewMat * headMat * eyeMat;
 
@@ -573,15 +711,25 @@ void VRManager::ModifyViewCamera(int eye, CCamera& cam)
 	// we don't have obvious access to the projection matrix, and the camera code is written with symmetric projection in mind
 	// for now, set up a symmetric FOV and cut off parts of the image during submission
 	vector2di renderSize = GetRenderSize();
+	// CCamera semantics: vertical fov = fov * projectionRatio (ratio defaults to height/width), and the
+	// horizontal extent follows from square pixels. For the anamorphic WinlatorXR render the pixel
+	// width is scaled up but the projection must stay that of the logical eye, so pin the ratio to the
+	// logical aspect explicitly.
+	float logicalWidth = renderSize.x / (float)WinlatorRenderScaleX();
 	float vertFovAngle = atanf(m_verticalFov) * 2;
-	float horzFovAngle = vertFovAngle * renderSize.x / (float)renderSize.y;
-	cam.Init(renderSize.x, renderSize.y, horzFovAngle, cam.GetZMax(), 0, cam.GetZMin());
+	float horzFovAngle = vertFovAngle * logicalWidth / (float)renderSize.y;
+	float projectionRatio = WinlatorRenderScaleX() > 1 ? renderSize.y / logicalWidth : 0.f;
+	cam.Init(renderSize.x, renderSize.y, horzFovAngle, cam.GetZMax(), projectionRatio, cam.GetZMin());
 	cam.Update();
 
 	// but we can set up frustum planes for our asymmetric projection, which should help culling accuracy.
-	float tanl, tanr, tant, tanb;
-	vr::VRSystem()->GetProjectionRaw(eye == 0 ? vr::Eye_Left : vr::Eye_Right, &tanl, &tanr, &tant, &tanb);
-	//cam.UpdateFrustumFromVRRaw(tanl, tanr, -tanb, -tant);
+	if (!m_usingWinlatorXR)
+	{
+		// (WinlatorXR only ever has a symmetric FOV, so there is nothing to do there)
+		float tanl, tanr, tant, tanb;
+		vr::VRSystem()->GetProjectionRaw(eye == 0 ? vr::Eye_Left : vr::Eye_Right, &tanl, &tanr, &tant, &tanb);
+		//cam.UpdateFrustumFromVRRaw(tanl, tanr, -tanb, -tant);
+	}
 }
 
 void VRManager::Modify2DCamera(CCamera& cam)
@@ -605,7 +753,7 @@ void VRManager::Modify2DCamera(CCamera& cam)
 
 	Ang3 angles = cam.GetAngles();
 	Vec3 position = cam.GetPos();
-	position.z -= m_referenceHeight;
+	position.z -= GetEffectiveReferenceHeight();
 
 	CPlayer* player = m_pGame->GetLocalPlayer();
 	if (player && !m_pGame->IsCutSceneActive())
@@ -666,7 +814,7 @@ void VRManager::ModifyBinocularCamera(IEntityCamera* cam)
 
 	Ang3 angles = cam->GetAngles();
 	Vec3 position = cam->GetPos();
-	position.z -= m_referenceHeight;
+	position.z -= GetEffectiveReferenceHeight();
 
 	CPlayer* player = m_pGame->GetLocalPlayer();
 	if (player && !m_pGame->IsCutSceneActive())
@@ -702,6 +850,14 @@ void VRManager::ModifyBinocularCamera(IEntityCamera* cam)
 
 void VRManager::GetEffectiveRenderLimits(int eye, float* left, float* right, float* top, float* bottom)
 {
+	if (m_usingWinlatorXR)
+	{
+		// WinlatorXR presents a symmetric projection (fovH x fovV), and that is exactly what the
+		// camera renders (see ModifyViewCamera), so the whole eye image is used - no crop needed
+		*left = 0.f; *right = 1.f; *top = 0.f; *bottom = 1.f;
+		return;
+	}
+
 	float l, r, t, b;
 	vr::VRSystem()->GetProjectionRaw(eye == 0 ? vr::Eye_Left : vr::Eye_Right, &l, &r, &t, &b);
 	*left = 0.5f + 0.5f * l / m_horizontalFov;
@@ -712,13 +868,19 @@ void VRManager::GetEffectiveRenderLimits(int eye, float* left, float* right, flo
 
 void VRManager::ProcessInput()
 {
-	bool firstValidPose = m_referenceHeight < 0 && m_headPose.bPoseIsValid;
+	bool firstValidPose = !m_referenceCalibrated && m_headPose.bPoseIsValid;
 	if (firstValidPose)
 	{
+		// establishes the reference yaw / floor height once tracking is available (both backends)
 		RecalibrateView();
 	}
 
-	if (!gVRRenderer->ShouldRenderStereo())
+	UpdateDesktopInputBlock();
+
+	// Everything touching vr::VROverlay() below is SteamVR-only. Under WinlatorXR the HUD is composed
+	// into the frame ourselves (ComposeWinlatorXRFrame) and the menu is a flat screen that WinlatorXR's
+	// own controller-as-mouse emulation operates on, so there is no overlay/laser handling to do.
+	if (!m_usingWinlatorXR && !gVRRenderer->ShouldRenderStereo())
 		vr::VROverlay()->HideOverlay(m_3DOverlay);
 
 	if ((m_pGame->IsInMenu() || m_pGame->GetSystem()->GetIConsole()->IsOpened()) && UseMotionControllers())
@@ -728,15 +890,21 @@ void VRManager::ProcessInput()
 			CryLogAlways("Entering menu...");
 			m_wasInMenu = true;
 			m_buttonPressed = false;
-			vr::VROverlay()->SetOverlayInputMethod(m_hudOverlay, vr::VROverlayInputMethod_Mouse);
-			vr::VROverlay()->SetOverlayFlag(m_hudOverlay, vr::VROverlayFlags_MakeOverlaysInteractiveIfVisible, true);
-			vr::VROverlay()->SetOverlayFlag(m_hudOverlay, vr::VROverlayFlags_HideLaserIntersection, true);
+			if (!m_usingWinlatorXR)
+			{
+				vr::VROverlay()->SetOverlayInputMethod(m_hudOverlay, vr::VROverlayInputMethod_Mouse);
+				vr::VROverlay()->SetOverlayFlag(m_hudOverlay, vr::VROverlayFlags_MakeOverlaysInteractiveIfVisible, true);
+				vr::VROverlay()->SetOverlayFlag(m_hudOverlay, vr::VROverlayFlags_HideLaserIntersection, true);
+			}
 			RecalibrateView();
 
 			m_vrHaptics.StopAllEffects();
 		}
-		SetHudInFrontOfPlayer();
-		ProcessMenuInput();
+		if (!m_usingWinlatorXR)
+		{
+			SetHudInFrontOfPlayer();
+			ProcessMenuInput();
+		}
 		return;
 	}
 
@@ -744,25 +912,31 @@ void VRManager::ProcessInput()
 	{
 		m_wasInMenu = false;
 		m_buttonPressed = false;
-		vr::VROverlay()->SetOverlayInputMethod(m_hudOverlay, vr::VROverlayInputMethod_None);
-		vr::VROverlay()->SetOverlayFlag(m_hudOverlay, vr::VROverlayFlags_MakeOverlaysInteractiveIfVisible, false);
+		if (!m_usingWinlatorXR)
+		{
+			vr::VROverlay()->SetOverlayInputMethod(m_hudOverlay, vr::VROverlayInputMethod_None);
+			vr::VROverlay()->SetOverlayFlag(m_hudOverlay, vr::VROverlayFlags_MakeOverlaysInteractiveIfVisible, false);
+		}
 		RecalibrateView();
 	}
 
 	if (!UseMotionControllers())
 		return;
 
-	CPlayer* player = m_pGame->GetLocalPlayer();
-	if (player && player->IsWeaponZoomActive())
-		SetHudAsWeaponZoom();
-	else if (m_pGame->AreBinocularsActive())
-		SetHudAsBinoculars();
-	else if (m_pGame->IsCutSceneActive() && gVR->vr_cutscenes_cinema_mode > 0)
-		SetHudInFrontOfPlayer();
-	else if (IsDrivingVehicleInCinemaMode())
-		SetHudInFrontOfPlayer();
-	else
-		SetHudAttachedToHead();
+	if (!m_usingWinlatorXR)
+	{
+		CPlayer* player = m_pGame->GetLocalPlayer();
+		if (player && player->IsWeaponZoomActive())
+			SetHudAsWeaponZoom();
+		else if (m_pGame->AreBinocularsActive())
+			SetHudAsBinoculars();
+		else if (m_pGame->IsCutSceneActive() && gVR->vr_cutscenes_cinema_mode > 0)
+			SetHudInFrontOfPlayer();
+		else if (IsDrivingVehicleInCinemaMode())
+			SetHudInFrontOfPlayer();
+		else
+			SetHudAttachedToHead();
+	}
 
 	m_input.ProcessInput();
 	ProcessRoomscale();
@@ -821,6 +995,13 @@ bool VRManager::UseMotionControllers() const
 
 Matrix34 VRManager::GetControllerTransform(int hand)
 {
+	if (!m_inputReady)
+	{
+		// called from gameplay code (weapon positioning etc.) independent of our own state; without a
+		// working input backend there is no controller pose to give
+		return Matrix34::CreateIdentity();
+	}
+
 	Ang3 refAngles(0, 0, m_referenceYaw);
 	Matrix33 refTransform;
 	refTransform.SetRotationXYZ(refAngles);
@@ -894,7 +1075,7 @@ void VRManager::ProcessRoomscale()
 		m_pGame->GetClient()->EnableMotionControls(m_pGame->g_LeftHanded->GetIVal() == 0);
 		Vec3 hmdPos = m_hmdTransform.GetTranslation();
 		Ang3 hmdAngles = ToAnglesDeg(m_hmdTransform);
-		m_pGame->GetClient()->UpdateHmdTransform(hmdPos, hmdAngles, m_referenceHeight);
+		m_pGame->GetClient()->UpdateHmdTransform(hmdPos, hmdAngles, GetEffectiveReferenceHeight());
 
 		for (int i = 0; i < 2; ++i)
 		{
@@ -919,6 +1100,7 @@ void VRManager::RecalibrateView()
 	m_referenceHeight = m_referencePosition.z;
 	m_referencePosition.z = 0;
 	m_referenceYaw = rawAngles.z;
+	m_referenceCalibrated = true;
 	UpdateHmdTransform();
 
 	// recalibrate menu HUD positioning
@@ -1008,7 +1190,8 @@ void VRManager::InitDevice(IDirect3DDevice9Ex* device)
 	CryLogAlways("Acquiring device...");
 	m_d3d->device = device;
 
-	//VR_InitD3D10DeviceHooks(m_device.Get());
+	if (m_usingWinlatorXR && device)
+		InstallWinlatorXRWindowHook(device);
 }
 
 void VRManager::CreateEyeTexture(int eye)
@@ -1075,6 +1258,11 @@ void VRManager::RegisterCVars()
 	console->Register("vr_render_force_obj_draw_dist", &vr_render_force_obj_draw_dist, 0, VF_DUMPTODISK, "If enabled, will force objects and enemies to be drawn at much further distances (might result in rendering issues in some instances)");
 	console->Register("vr_window_width", &vr_window_width, 1920, VF_DUMPTODISK, "Configures the Far Cry desktop window width");
 	console->Register("vr_window_height", &vr_window_height, 1080, VF_DUMPTODISK, "Configures the Far Cry desktop window height");
+	console->Register("vr_winlatorxr_render_height", &vr_winlatorxr_render_height, 1024, VF_DUMPTODISK, "Per-eye render target height when running under WinlatorXR (Quest/Pico); width follows the headset FOV aspect");
+	// NOTE: anamorphic rendering deadlocked the game on the Quest 3 in testing (first frame never presents), so it is off by default until that is understood
+	console->Register("vr_winlatorxr_anamorphic", &vr_winlatorxr_anamorphic, 0, VF_DUMPTODISK, "Under WinlatorXR, render each eye at double horizontal resolution so the side-by-side frame keeps full per-eye detail (experimental, costs GPU time; 0 = off)");
+	console->Register("vr_winlatorxr_aer", &vr_winlatorxr_aer, 0, VF_DUMPTODISK, "Under WinlatorXR, use alternate-eye rendering: one full-resolution eye per frame instead of side-by-side (sharper and cheaper per frame, but each eye updates at half rate)");
+	console->Register("vr_winlatorxr_block_desktop_input", &vr_winlatorxr_block_desktop_input, 1, VF_DUMPTODISK, "Under WinlatorXR, ignore the mouse/keyboard that WinlatorXR emulates from the controllers while motion controls are active (they would double-trigger actions)");
 	console->Register("vr_mirrored_eye", &vr_mirrored_eye, 1, VF_DUMPTODISK, "Which eye view is mirrored to the desktop window. 0 - left, 1 - right");
 	console->Register("vr_melee_swing_threshold", &vr_melee_swing_threshold, 2.f, VF_CHEAT, "Configures speed threshold for physical swings to register as melee attacks");
 	console->Register("vr_debug_draw_grip", &vr_debug_draw_grip, 0, 0, "If enabled, highlights the position of the current weapon's grip positions");
@@ -1093,6 +1281,7 @@ void VRManager::RegisterCVars()
 	console->Register("vr_binocular_size", &vr_binocular_size, 0.4f, VF_DUMPTODISK, "Width of the binocular overlay (in meters)");
 	console->Register("vr_scope_size", &vr_scope_size, 0.3f, VF_DUMPTODISK, "Width of the weapon scope overlay (in meters)");
 	console->Register("vr_seated_mode", &vr_seated_mode, 0, VF_DUMPTODISK, "If enabled, will fix VR camera at player head height and disable physical crouching");
+	console->Register("vr_height_offset", &vr_height_offset, 0.0f, VF_DUMPTODISK, "Raises (positive) or lowers (negative) the in-game eye height by this many metres");
 	console->Register("vr_cutscenes_cinema_mode", &vr_cutscenes_cinema_mode, 0, VF_DUMPTODISK, "Determines how cutscenes are played. 0 - full VR, 1 - 2D cinema, 2 - 3D cinema");
 	console->Register("vr_vehicles_cinema_mode", &vr_vehicles_cinema_mode, 0, VF_DUMPTODISK, "Determines how vehicles are played. 0 - full VR, 1 - 2D cinema, 2 - 3D cinema");
 	console->Register("vr_hud_distance", &vr_hud_distance, 2.5f, VF_DUMPTODISK, "Determines how far away from the player the ingame HUD is placed");
@@ -1128,4 +1317,356 @@ void VRManager::UpdateHmdTransform()
 	Matrix34 rawHmdTransform = OpenVRToFarCry(m_headPose.mDeviceToAbsoluteTracking);
 	rawHmdTransform.SetTranslation(rawHmdTransform.GetTranslation() - m_referencePosition);
 	m_hmdTransform = refTransform * rawHmdTransform;
+}
+
+void VRManager::UpdateWinlatorXRPose()
+{
+	WinlatorXR::InputState state = WinlatorXR::GetLatestState();
+	if (!state.valid)
+	{
+		// keep whatever we had (initially: invalid) until the first packet arrives
+		return;
+	}
+
+	// WinlatorXR forwards the raw OpenXR view pose: the quaternion/position use the same convention as
+	// OpenVR (x = right, y = up, -z = forward, metres, floor-level STAGE space), so it can be dropped
+	// straight into the OpenVR pose struct and go through OpenVRToFarCry like a SteamVR pose would.
+	float qx = state.hmdQx, qy = state.hmdQy, qz = state.hmdQz, qw = state.hmdQw;
+	float len = sqrtf(qx * qx + qy * qy + qz * qz + qw * qw);
+	if (len < 1e-4f)
+	{
+		// degenerate (all-zero) quaternion, e.g. before the runtime has produced its first real pose
+		return;
+	}
+	qx /= len; qy /= len; qz /= len; qw /= len;
+
+	// Lift LOCAL-space poses to floor level: protocol 0.5 reports the head's height above the floor
+	// (STAGE space), so offset = altitude - local y. Kept as a running value (it only changes if
+	// WinlatorXR recentres) and shared with the controller poses via GetWinlatorFloorOffset().
+	if (state.hmdAltitude > 0.3f && state.hmdAltitude < 3.f)
+	{
+		float offset = state.hmdAltitude - state.hmdY;
+		if (!m_winlatorFloorOffsetValid)
+			CryLogAlways("[WinlatorXR] floor offset from HMD altitude: %.3f m (head %.3f m above floor)", offset, state.hmdAltitude);
+		m_winlatorFloorOffset = offset;
+		m_winlatorFloorOffsetValid = true;
+	}
+	float floorY = state.hmdY + GetWinlatorFloorOffset();
+
+	m_headPose.mDeviceToAbsoluteTracking = HmdMatrixFromQuatPos(qx, qy, qz, qw, state.hmdX, floorY, state.hmdZ);
+	m_headPose.bPoseIsValid = true;
+	m_headPose.bDeviceIsConnected = true;
+	m_headPose.eTrackingResult = vr::TrackingResult_Running_OK;
+	// remember which of WinlatorXR's pose slots this frame is rendered with (0..252 in steps of 12)
+	m_winlatorFrameSync = clamp_tpl(state.frameId, 0, 255);
+
+	// eye separation: WinlatorXR reports the distance between the two OpenXR eye views in metres.
+	// Be lenient about units in case a future protocol version switches to millimetres.
+	float ipd = state.ipd;
+	if (ipd > 1.f)
+		ipd *= 0.001f;
+	if (ipd >= 0.045f && ipd <= 0.085f)
+		m_winlatorEyeSeparation = ipd;
+
+	// symmetric FOV as reported by the headset runtime (degrees); ignore obviously bogus values
+	if (state.fovH >= 40.f && state.fovH <= 150.f && state.fovV >= 40.f && state.fovV <= 150.f)
+	{
+		float horz = tanf(DEG2RAD(state.fovH) / 2.f);
+		float vert = tanf(DEG2RAD(state.fovV) / 2.f);
+		if (fabsf(horz - m_horizontalFov) > 1e-3f || fabsf(vert - m_verticalFov) > 1e-3f)
+		{
+			m_horizontalFov = horz;
+			m_verticalFov = vert;
+			CryLogAlways("[WinlatorXR] FOV updated: horz %.1f deg  vert %.1f deg", state.fovH, state.fovV);
+		}
+	}
+
+	if (!m_winlatorPoseLogged)
+	{
+		m_winlatorPoseLogged = true;
+		CryLogAlways("[WinlatorXR] Received first head pose: pos=(%.3f, %.3f, %.3f) ipd=%.4f m fov=%.1fx%.1f", state.hmdX, state.hmdY, state.hmdZ, m_winlatorEyeSeparation, state.fovH, state.fovV);
+	}
+}
+
+Matrix34 VRManager::GetEyeToHeadTransform(int eye)
+{
+	if (m_usingWinlatorXR)
+	{
+		// WinlatorXR only gives us the centre eye pose plus the IPD, so the eye offset is a plain
+		// horizontal shift: left eye towards -x, right eye towards +x (OpenVR/OpenXR convention)
+		float shift = (eye == 0 ? -0.5f : 0.5f) * m_winlatorEyeSeparation;
+		return OpenVRToFarCry(HmdMatrixFromQuatPos(0.f, 0.f, 0.f, 1.f, shift, 0.f, 0.f));
+	}
+
+	return OpenVRToFarCry(vr::VRSystem()->GetEyeToHeadTransform(eye == 0 ? vr::Eye_Left : vr::Eye_Right));
+}
+
+void VRManager::DrawTexturedQuad(IDirect3DTexture9* texture, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, bool alphaBlend)
+{
+	struct Vertex
+	{
+		float x, y, z, w;
+		float u, v;
+	};
+	// -0.5 offsets: D3D9 pixel centre convention for pre-transformed vertices
+	Vertex vertices[4] =
+	{
+		{ x0 - 0.5f, y0 - 0.5f, 0.0f, 1.0f, u0, v0 },
+		{ x1 - 0.5f, y0 - 0.5f, 0.0f, 1.0f, u1, v0 },
+		{ x1 - 0.5f, y1 - 0.5f, 0.0f, 1.0f, u1, v1 },
+		{ x0 - 0.5f, y1 - 0.5f, 0.0f, 1.0f, u0, v1 },
+	};
+
+	IDirect3DDevice9Ex* dev = m_d3d->device.Get();
+	if (alphaBlend)
+	{
+		// classic "over" blend for the colour channels, but keep the destination alpha at 1: WinlatorXR
+		// composites our frame with source-alpha blending, so any alpha < 1 would let passthrough shine through
+		dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+		dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+		dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+		dev->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, TRUE);
+		dev->SetRenderState(D3DRS_SRCBLENDALPHA, D3DBLEND_ONE);
+		dev->SetRenderState(D3DRS_DESTBLENDALPHA, D3DBLEND_ONE);
+		dev->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+		dev->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+	}
+	else
+	{
+		// opaque copy; force alpha to 1 regardless of what the engine left in the eye texture's alpha channel
+		dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+		dev->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, FALSE);
+		dev->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG2);
+		dev->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_TFACTOR);
+	}
+	dev->SetTexture(0, texture);
+	dev->DrawPrimitiveUP(D3DPT_TRIANGLEFAN, 2, vertices, sizeof(Vertex));
+}
+
+void VRManager::DrawHud(int eye, int x0Region, int halfWidth, int height)
+{
+	if (!m_d3d->hudTexture)
+		return;
+
+	D3DSURFACE_DESC desc;
+	m_d3d->hudTexture->GetLevelDesc(0, &desc);
+	if (desc.Width == 0 || desc.Height == 0 || m_horizontalFov <= 0.f || m_verticalFov <= 0.f)
+		return;
+
+	// Mimic the SteamVR path, where the HUD is a head-locked overlay of vr_hud_width metres at
+	// vr_hud_distance metres (keeping the texture's aspect ratio). Everything below is done in
+	// tangent space: the eye image spans [-m_horizontalFov, +m_horizontalFov] horizontally and
+	// [+m_verticalFov, -m_verticalFov] vertically (both are tan(fov/2)).
+	float distance = max(vr_hud_distance, 0.1f);
+	float halfWidthTan = 0.5f * vr_hud_width / distance;
+	// the HUD texture is captured at the (possibly anamorphic) render size; its logical aspect is
+	// what the OpenVR overlay would show
+	float logicalTexWidth = desc.Width / (float)WinlatorRenderScaleX();
+	float halfHeightTan = halfWidthTan * desc.Height / logicalTexWidth;
+	// stereo convergence: an object straight ahead at 'distance' is seen shifted towards the nose in
+	// each eye, i.e. to the right in the left eye's image and to the left in the right eye's image
+	float shiftTan = (eye == 0 ? 1.f : -1.f) * 0.5f * m_winlatorEyeSeparation / distance;
+
+	float x0 = x0Region + halfWidth * (0.5f + (shiftTan - halfWidthTan) / (2.f * m_horizontalFov));
+	float x1 = x0Region + halfWidth * (0.5f + (shiftTan + halfWidthTan) / (2.f * m_horizontalFov));
+	float y0 = height * (0.5f - halfHeightTan / (2.f * m_verticalFov));
+	float y1 = height * (0.5f + halfHeightTan / (2.f * m_verticalFov));
+
+	// never bleed outside this eye's region (matters for side-by-side)
+	RECT scissor = { x0Region, 0, x0Region + halfWidth, height };
+	m_d3d->device->SetScissorRect(&scissor);
+	m_d3d->device->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
+	DrawTexturedQuad(m_d3d->hudTexture.Get(), x0, y0, x1, y1, 0.f, 0.f, 1.f, 1.f, true);
+	m_d3d->device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+}
+
+void VRManager::ComposeWinlatorXRFrame()
+{
+	if (!m_d3d->device)
+		return;
+
+	// Decide what this frame is. The back buffer currently holds whatever the engine rendered last:
+	// in VR mode that is the HUD over a transparent clear (the eyes live in m_d3d->eyeTextures),
+	// in the 2D modes (binoculars, scopes, cinema) it is the flat game image plus HUD.
+	bool inMenu = m_pGame->IsInMenu();
+	bool haveEyes = m_d3d->eyeTextures[0].Get() != nullptr && m_d3d->eyeTextures[1].Get() != nullptr;
+	bool vrWorld = !inMenu && haveEyes && gVRRenderer->ShouldRenderVR() && !gVRRenderer->ShouldRender2D();
+	bool stereoPlane = !inMenu && !vrWorld && gVRRenderer->ShouldRenderStereo() && m_d3d->stereoTexture.Get() != nullptr;
+
+	if (!vrWorld && !stereoPlane)
+	{
+		// flat frame (menu, binoculars, weapon scope, 2D cinema): let WinlatorXR show the back buffer
+		// as-is on its virtual screen
+		m_winlatorModeVr = 2;
+		m_winlatorMode3d = 0;
+		return;
+	}
+
+	ComPtr<IDirect3DSurface9> backBuffer;
+	m_d3d->device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, backBuffer.GetAddressOf());
+	if (!backBuffer)
+		return;
+	D3DSURFACE_DESC bbDesc;
+	backBuffer->GetDesc(&bbDesc);
+	int width = bbDesc.Width;
+	int height = bbDesc.Height;
+	int halfWidth = width / 2;
+
+	m_pGame->m_pRenderer->ResetToDefault();
+
+	IDirect3DStateBlock9* stateBlock = nullptr;
+	m_d3d->device->CreateStateBlock(D3DSBT_ALL, &stateBlock);
+
+	IDirect3DDevice9Ex* dev = m_d3d->device.Get();
+	D3DVIEWPORT9 viewport = { 0, 0, (DWORD)width, (DWORD)height, 0.f, 1.f };
+	dev->SetViewport(&viewport);
+	dev->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+	dev->SetRenderState(D3DRS_LIGHTING, FALSE);
+	dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+	dev->SetRenderState(D3DRS_ZENABLE, D3DZB_FALSE);
+	dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+	dev->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+	dev->SetRenderState(D3DRS_VERTEXBLEND, FALSE);
+	dev->SetRenderState(D3DRS_FOGENABLE, FALSE);
+	dev->SetRenderState(D3DRS_SPECULARENABLE, FALSE);
+	dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+	dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
+	dev->SetRenderState(D3DRS_TEXTUREFACTOR, 0xFFFFFFFF);
+	dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+	dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+	dev->SetTextureStageState(0, D3DTSS_TEXCOORDINDEX, 0);
+	dev->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+	dev->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+	dev->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+	dev->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+	dev->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+	dev->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+	dev->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+	dev->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+	dev->SetVertexShader(nullptr);
+	dev->SetPixelShader(nullptr);
+
+	if (vrWorld && UseWinlatorAER())
+	{
+		// Alternate-eye: the whole frame is the eye rendered this frame, at full resolution. The
+		// frame-sync marker's blue channel tells WinlatorXR which of its two eye framebuffers to
+		// update (B > 0 = right), R selects the pose the frame was rendered with.
+		int eye = m_winlatorAerEye;
+		DrawTexturedQuad(m_d3d->eyeTextures[eye].Get(), 0.f, 0.f, (float)width, (float)height, 0.f, 0.f, 1.f, 1.f, false);
+		DrawHud(eye, 0, width, height);
+
+		D3DRECT syncRect = { 0, 0, 8, 8 };
+		dev->Clear(1, &syncRect, D3DCLEAR_TARGET, D3DCOLOR_ARGB(255, m_winlatorFrameSync, 0, eye == 1 ? 255 : 0), 1.f, 0);
+
+		m_winlatorModeVr = 1;
+		m_winlatorMode3d = 2;
+	}
+	else if (vrWorld)
+	{
+		// Side-by-side: left eye in the left half, right eye in the right half. WinlatorXR stretches
+		// each half over the FOV we render with, so squeezing the square eye images into the halves
+		// is exactly undone on the headset.
+		for (int eye = 0; eye < 2; ++eye)
+		{
+			DrawTexturedQuad(m_d3d->eyeTextures[eye].Get(), (float)(eye * halfWidth), 0.f, (float)((eye + 1) * halfWidth), (float)height, 0.f, 0.f, 1.f, 1.f, false);
+		}
+		for (int eye = 0; eye < 2; ++eye)
+		{
+			DrawHud(eye, eye * halfWidth, halfWidth, height);
+		}
+
+		// Frame-sync marker: WinlatorXR samples screen pixel (0,0) and, if G == 0 and A > 0, uses R as
+		// the index of the head pose our frame was rendered with. A small block (rather than a single
+		// pixel) survives the scaling from back buffer to X screen.
+		D3DRECT syncRect = { 0, 0, 8, 8 };
+		dev->Clear(1, &syncRect, D3DCLEAR_TARGET, D3DCOLOR_ARGB(255, m_winlatorFrameSync, 0, 0), 1.f, 0);
+
+		m_winlatorModeVr = 1;
+		m_winlatorMode3d = 1;
+	}
+	else
+	{
+		// 3D cinema plane (cutscenes/vehicles): the stereo texture is already side-by-side, show it on
+		// WinlatorXR's virtual screen in SBS mode with the HUD on top of each half
+		DrawTexturedQuad(m_d3d->stereoTexture.Get(), 0.f, 0.f, (float)width, (float)height, 0.f, 0.f, 1.f, 1.f, false);
+		for (int eye = 0; eye < 2; ++eye)
+		{
+			DrawHud(eye, eye * halfWidth, halfWidth, height);
+		}
+		m_winlatorModeVr = 2;
+		m_winlatorMode3d = 1;
+	}
+
+	if (stateBlock)
+	{
+		stateBlock->Apply();
+		stateBlock->Release();
+	}
+}
+
+#ifndef WM_MOUSEHWHEEL
+#define WM_MOUSEHWHEEL 0x020E
+#endif
+
+static WNDPROC s_winlatorOrigWndProc = nullptr;
+static HWND s_winlatorHookedWnd = nullptr;
+
+static LRESULT CALLBACK WinlatorXRWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+	// FarCry.exe's own window procedure dereferences an invalid mouse object for WM_MOUSEWHEEL under
+	// Wine (crash observed at FarCry.exe+0x1376), and WinlatorXR generates wheel events from the
+	// primary thumbstick. The wheel has no use in VR anyway, so swallow it.
+	if (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL)
+		return 0;
+
+	return CallWindowProcA(s_winlatorOrigWndProc, hWnd, msg, wParam, lParam);
+}
+
+void VRManager::InstallWinlatorXRWindowHook(IDirect3DDevice9Ex* device)
+{
+	D3DDEVICE_CREATION_PARAMETERS params;
+	memset(&params, 0, sizeof(params));
+	HWND hWnd = nullptr;
+	if (SUCCEEDED(device->GetCreationParameters(&params)))
+		hWnd = params.hFocusWindow;
+	if (!hWnd)
+		hWnd = GetActiveWindow();
+	if (!hWnd || hWnd == s_winlatorHookedWnd)
+		return;
+
+	WNDPROC prev = (WNDPROC)SetWindowLongPtrA(hWnd, GWLP_WNDPROC, (LONG_PTR)WinlatorXRWndProc);
+	if (!prev)
+	{
+		CryLogAlways("[WinlatorXR] failed to subclass game window 0x%p (error %u)", hWnd, GetLastError());
+		return;
+	}
+	s_winlatorOrigWndProc = prev;
+	s_winlatorHookedWnd = hWnd;
+	CryLogAlways("[WinlatorXR] subclassed game window 0x%p - mouse wheel messages are dropped", hWnd);
+}
+
+void VRManager::UpdateDesktopInputBlock()
+{
+	if (!m_usingWinlatorXR)
+		return;
+	IActionMapManager* actionMaps = m_pGame->GetActionMapManager();
+	if (!actionMaps)
+		return;
+
+	bool inMenu = m_pGame->IsInMenu() || m_pGame->GetSystem()->GetIConsole()->IsOpened();
+	bool shouldBlock = vr_winlatorxr_block_desktop_input != 0 && UseMotionControllers() && !inMenu;
+
+	if (shouldBlock)
+	{
+		// re-applied every frame: the game re-enables the action maps itself whenever an exclusive
+		// UI overlay (dialogs, menu) closes
+		if (actionMaps->IsEnabled())
+			actionMaps->Disable();
+	}
+	else if (m_desktopInputBlocked && !actionMaps->IsEnabled() && !m_pGame->m_bUIExclusiveInput)
+	{
+		// give the keyboard/mouse back, but only if it was us who took it away
+		actionMaps->Enable();
+	}
+	m_desktopInputBlocked = shouldBlock;
 }
