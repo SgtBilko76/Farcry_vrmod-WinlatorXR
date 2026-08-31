@@ -192,6 +192,7 @@ public:
 	int vr_winlatorxr_render_height;
 	int vr_winlatorxr_block_desktop_input;
 	int vr_winlatorxr_anamorphic;
+	int vr_winlatorxr_max_fps;
 
 	// Under WinlatorXR the final frame is side-by-side in a back buffer that is also the engine's
 	// render target, so a plain composite halves the horizontal resolution of each eye. With

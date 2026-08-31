@@ -200,6 +200,19 @@ bool VRManager::Init(CXGame *game)
 
 	if (m_usingWinlatorXR)
 	{
+		// WinlatorXR launches the game with DXVK_FRAME_RATE=72 (dxvk's frame limiter). Under Wine/Box64
+		// that limiter's sleeps are coarse enough that the game locks to 72/2 or 72/4 fps as soon as a
+		// frame takes slightly longer than a refresh. dxvk re-reads the variable whenever it recreates
+		// its presenter, which happens on the device reset our first render-resolution change causes -
+		// so overriding it here is early enough.
+		char maxFps[16];
+		sprintf(maxFps, "%d", max(vr_winlatorxr_max_fps, 0));
+		SetEnvironmentVariableA("DXVK_FRAME_RATE", maxFps);
+		CryLogAlways("[WinlatorXR] DXVK_FRAME_RATE overridden to %s (vr_winlatorxr_max_fps)", maxFps);
+	}
+
+	if (m_usingWinlatorXR)
+	{
 		// controller input comes from the XrAPI packet; only controller vibration is available as
 		// haptics on a standalone headset (no bHaptics vest / ProTubeVR there)
 		m_inputReady = m_input.InitWinlatorXR(game);
@@ -1276,6 +1289,7 @@ void VRManager::RegisterCVars()
 	console->Register("vr_winlatorxr_render_height", &vr_winlatorxr_render_height, 1600, VF_DUMPTODISK, "Per-eye render target height when running under WinlatorXR (Quest/Pico); width follows the headset FOV aspect. The game is CPU-bound on these devices, so a tall render (it is squeezed 2:1 into the side-by-side frame) is affordable and much sharper");
 	// NOTE: anamorphic rendering deadlocked the game on the Quest 3 in testing (first frame never presents), so it is off by default until that is understood
 	console->Register("vr_winlatorxr_anamorphic", &vr_winlatorxr_anamorphic, 0, VF_DUMPTODISK, "Under WinlatorXR, render each eye at double horizontal resolution so the side-by-side frame keeps full per-eye detail (experimental, costs GPU time; 0 = off)");
+	console->Register("vr_winlatorxr_max_fps", &vr_winlatorxr_max_fps, 0, VF_DUMPTODISK, "Under WinlatorXR, frame-rate cap applied via dxvk's limiter (0 = uncapped; WinlatorXR's own 72 fps cap quantises the game to 36/18 fps)");
 	console->Register("vr_winlatorxr_aer", &vr_winlatorxr_aer, 0, VF_DUMPTODISK, "Under WinlatorXR, use alternate-eye rendering: one full-resolution eye per frame instead of side-by-side (sharper and cheaper per frame, but each eye updates at half rate)");
 	console->Register("vr_winlatorxr_block_desktop_input", &vr_winlatorxr_block_desktop_input, 1, VF_DUMPTODISK, "Under WinlatorXR, ignore the mouse/keyboard that WinlatorXR emulates from the controllers while motion controls are active (they would double-trigger actions)");
 	console->Register("vr_mirrored_eye", &vr_mirrored_eye, 1, VF_DUMPTODISK, "Which eye view is mirrored to the desktop window. 0 - left, 1 - right");
