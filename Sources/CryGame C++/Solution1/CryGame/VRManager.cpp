@@ -165,38 +165,17 @@ static void OnCrtPureCall()
 	LogCallStack("pure virtual function call");
 }
 
-// abort() shows its "Runtime Error" box *before* raising SIGABRT, so hook the function itself to get
-// the stack first. There are two CRT instances in this process that can produce that box: ucrtbase
-// (CryGame.dll, dxvk d3d9.dll, ffmpeg, ...) and Wine's msvcrt (dsound.dll / dsoal-aldrv.dll).
-static void __cdecl Hook_AbortUcrt()
-{
-	LogCallStack("abort() called (ucrtbase)");
-	hooks::CallOriginal(Hook_AbortUcrt)();
-}
-
-static void __cdecl Hook_AbortMsvcrt()
-{
-	LogCallStack("abort() called (msvcrt)");
-	hooks::CallOriginal(Hook_AbortMsvcrt)();
-}
-
+// NOTE: earlier builds also MinHook-patched abort()/_amsg_exit() in ucrtbase/msvcrt/msvcr71 to grab a
+// stack before the CRT's "Runtime Error" box. Those hooks never fired (MinHook can't reliably patch
+// Wine's builtin CRTs under Box64's dynarec) and patching those functions is risky, so only the
+// passive, in-process CRT handlers are installed now - they cost nothing and catch a purecall /
+// invalid-parameter abort raised through CryGame's own CRT.
 static void InstallCrtDiagnostics()
 {
 	signal(SIGABRT, OnCrtAbort);
 	_set_invalid_parameter_handler(OnCrtInvalidParameter);
 	_set_purecall_handler(OnCrtPureCall);
-
-	if (HMODULE ucrt = GetModuleHandleA("ucrtbase.dll"))
-	{
-		if (void* target = (void*)GetProcAddress(ucrt, "abort"))
-			hooks::InstallHook("ucrtbase!abort", target, (void*)&Hook_AbortUcrt);
-	}
-	if (HMODULE msvcrt = GetModuleHandleA("msvcrt.dll"))
-	{
-		if (void* target = (void*)GetProcAddress(msvcrt, "abort"))
-			hooks::InstallHook("msvcrt!abort", target, (void*)&Hook_AbortMsvcrt);
-	}
-	CryLogAlways("[WinlatorXR] CRT abort diagnostics installed (SIGABRT handler + abort hooks, stacks also go to vr_crash.txt)");
+	CryLogAlways("[WinlatorXR] CRT diagnostics installed (SIGABRT/invalid-parameter/purecall handlers; stacks go to vr_crash.txt)");
 }
 // ---------------------------------------------------------------------------------------------------
 
