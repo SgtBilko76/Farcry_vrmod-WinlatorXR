@@ -968,8 +968,10 @@ bool CXGame::Update()
 	// system rendering
 	if (bRenderFrame)
 	{	
-		// VR: check render resolution
-		vector2di targetRenderSize = gVR->GetRenderSize();
+		// VR: check render resolution. Under WinlatorXR the shared back buffer must stay at the full
+		// X screen so the side-by-side composite keeps each eye full-width (see GetWinlatorBackbufferSize);
+		// the per-eye textures are still captured at GetRenderSize.
+		vector2di targetRenderSize = gVR->IsUsingWinlatorXR() ? gVR->GetWinlatorBackbufferSize() : gVR->GetRenderSize();
 		if (targetRenderSize.x != m_pRenderer->GetWidth() || targetRenderSize.y != m_pRenderer->GetHeight())
 		{
 			CryLogAlways("Current render resolution: %i x %i", m_pRenderer->GetWidth(), m_pRenderer->GetHeight());
