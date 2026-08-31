@@ -538,6 +538,21 @@ void VRManager::FinishFrame()
 		// alternate-eye rendering: next frame renders and carries the other eye
 		if (UseWinlatorAER())
 			m_winlatorAerEye ^= 1;
+
+		// periodic frame-rate report: there is no overlay/tooling on the headset, and the frame rate
+		// decides how much WinlatorXR's reprojection has to warp our (stale) frames
+		static int s_frames = 0;
+		static float s_lastReport = 0.f;
+		float now = m_pGame->GetSystem()->GetITimer()->GetAsyncCurTime();
+		++s_frames;
+		if (s_lastReport == 0.f)
+			s_lastReport = now;
+		else if (now - s_lastReport >= 10.f)
+		{
+			CryLogAlways("[WinlatorXR] %.1f fps (%s, %dx%d per eye)", s_frames / (now - s_lastReport), UseWinlatorAER() ? "AER" : "SBS", GetRenderSize().x, GetRenderSize().y);
+			s_frames = 0;
+			s_lastReport = now;
+		}
 		return;
 	}
 
