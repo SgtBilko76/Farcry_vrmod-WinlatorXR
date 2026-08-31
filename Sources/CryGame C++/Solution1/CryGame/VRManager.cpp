@@ -15,6 +15,14 @@
 #include "XVehicle.h"
 #include "WinlatorXR.h"
 #include <tlhelp32.h>
+#include <stdlib.h>
+
+// STLport shadows <signal.h> with a broken wrapper, so declare the one UCRT function we need ourselves
+typedef void (__cdecl *crt_signal_handler_t)(int);
+extern "C" __declspec(dllimport) crt_signal_handler_t __cdecl signal(int sig, crt_signal_handler_t handler);
+#ifndef SIGABRT
+#define SIGABRT 22
+#endif
 
 
 HMODULE GetCurrentModule()
@@ -93,6 +101,56 @@ static vr::HmdMatrix34_t HmdMatrixFromQuatPos(float qx, float qy, float qz, floa
 	m.m[2][3] = z;
 	return m;
 }
+
+// --- CRT failure diagnostics (WinlatorXR) ----------------------------------------------------------
+// A "Microsoft Visual C++ Runtime Library - Runtime Error" box on the headset means some module using
+// the modern CRT called abort() (uncaught C++ exception, invalid parameter, pure virtual call ...).
+// That includes CryGame.dll itself and dxvk's d3d9.dll. Far Cry's own crash handler never sees those,
+// so log a module-resolved call stack before the CRT puts up its dialog.
+static void LogCallStack(const char* reason)
+{
+	void* frames[32];
+	USHORT count = CaptureStackBackTrace(1, 32, frames, nullptr);
+	CryLogAlways("[WinlatorXR] %s - call stack (%u frames):", reason, (unsigned)count);
+	for (USHORT i = 0; i < count; ++i)
+	{
+		HMODULE module = nullptr;
+		char moduleName[MAX_PATH] = "?";
+		uintptr_t base = 0;
+		if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)frames[i], &module) && module)
+		{
+			GetModuleFileNameA(module, moduleName, MAX_PATH);
+			base = (uintptr_t)module;
+		}
+		const char* shortName = strrchr(moduleName, '\\');
+		shortName = shortName ? shortName + 1 : moduleName;
+		CryLogAlways("  %2u) 0x%08X  %s+0x%X", (unsigned)i, (unsigned)(uintptr_t)frames[i], shortName, (unsigned)((uintptr_t)frames[i] - base));
+	}
+}
+
+static void OnCrtAbort(int)
+{
+	LogCallStack("abort() called - CRT runtime error");
+}
+
+static void OnCrtInvalidParameter(const wchar_t*, const wchar_t*, const wchar_t*, unsigned int, uintptr_t)
+{
+	LogCallStack("CRT invalid parameter");
+}
+
+static void OnCrtPureCall()
+{
+	LogCallStack("pure virtual function call");
+}
+
+static void InstallCrtDiagnostics()
+{
+	signal(SIGABRT, OnCrtAbort);
+	_set_invalid_parameter_handler(OnCrtInvalidParameter);
+	_set_purecall_handler(OnCrtPureCall);
+	CryLogAlways("[WinlatorXR] CRT abort/invalid-parameter/purecall diagnostics installed");
+}
+// ---------------------------------------------------------------------------------------------------
 
 struct VRManager::D3DResources
 {
@@ -209,6 +267,8 @@ bool VRManager::Init(CXGame *game)
 		sprintf(maxFps, "%d", max(vr_winlatorxr_max_fps, 0));
 		SetEnvironmentVariableA("DXVK_FRAME_RATE", maxFps);
 		CryLogAlways("[WinlatorXR] DXVK_FRAME_RATE overridden to %s (vr_winlatorxr_max_fps)", maxFps);
+
+		InstallCrtDiagnostics();
 	}
 
 	if (m_usingWinlatorXR)
