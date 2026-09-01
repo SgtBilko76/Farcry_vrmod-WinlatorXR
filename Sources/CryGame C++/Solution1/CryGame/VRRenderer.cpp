@@ -99,10 +99,8 @@ void VRRenderer::Render(ISystem* pSystem)
 		}
 	}
 
-	// the HUD/2D pass renders into the back buffer, which CaptureHUD then grabs. Under WinlatorXR the
-	// back buffer is the full (wide) X screen, so scissor to the whole buffer, not one eye's worth.
-	vector2di hudRegion = gVR->IsUsingWinlatorXR() ? gVR->GetWinlatorBackbufferSize() : gVR->GetRenderSize();
-	m_pGame->m_pRenderer->SetScissor(0, 0, hudRegion.x, hudRegion.y);
+	vector2di renderSize = gVR->GetRenderSize();
+	m_pGame->m_pRenderer->SetScissor(0, 0, renderSize.x, renderSize.y);
 	// clear render target to fully transparent for HUD render
 	dxvkGetCreatedDevice()->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 0, 0);
 
