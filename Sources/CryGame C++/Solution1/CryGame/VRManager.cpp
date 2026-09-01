@@ -448,15 +448,19 @@ void VRManager::CaptureEye(int eye)
 			return;
 	}
 
-	// acquire and copy the current swap chain buffer to the eye texture
+	// acquire and copy the current swap chain buffer to the eye texture. Under WinlatorXR the eye was
+	// rendered into its own half of the full-screen back buffer (see RenderSingleEye's viewport), so
+	// copy exactly that half (1:1, no scale).
 	ComPtr<IDirect3DSurface9> backBuffer;
 	m_d3d->device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, backBuffer.GetAddressOf());
 	ComPtr<IDirect3DSurface9> texSurface;
 	m_d3d->eyeTextures[eye]->GetSurfaceLevel(0, texSurface.GetAddressOf());
-	HRESULT hr = m_d3d->device->StretchRect(backBuffer.Get(), nullptr, texSurface.Get(), nullptr, D3DTEXF_POINT);
+	vector2di rs = GetRenderSize();
+	RECT srcRect = { 0, 0, rs.x, rs.y };
+	HRESULT hr = m_d3d->device->StretchRect(backBuffer.Get(), m_usingWinlatorXR ? &srcRect : nullptr, texSurface.Get(), nullptr, D3DTEXF_POINT);
 	if (hr != S_OK)
 	{
-		CryLogAlways("ERROR: Capturing HUD failed: %i", hr);
+		CryLogAlways("ERROR: Capturing eye failed: %i", hr);
 	}
 }
 
@@ -532,12 +536,15 @@ void VRManager::CaptureHUD()
 			return;
 	}
 
-	// acquire and copy the current back buffer to the HUD texture
+	// acquire and copy the current back buffer to the HUD texture. Under WinlatorXR the HUD/2D pass is
+	// scissored to the top-left GetRenderSize region (one eye), so copy just that region.
 	ComPtr<IDirect3DSurface9> backBuffer;
 	m_d3d->device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, backBuffer.GetAddressOf());
 	ComPtr<IDirect3DSurface9> texSurface;
 	m_d3d->hudTexture->GetSurfaceLevel(0, texSurface.GetAddressOf());
-	HRESULT hr = m_d3d->device->StretchRect(backBuffer.Get(), nullptr, texSurface.Get(), nullptr, D3DTEXF_POINT);
+	vector2di rsHud = GetRenderSize();
+	RECT srcRectHud = { 0, 0, rsHud.x, rsHud.y };
+	HRESULT hr = m_d3d->device->StretchRect(backBuffer.Get(), m_usingWinlatorXR ? &srcRectHud : nullptr, texSurface.Get(), nullptr, D3DTEXF_POINT);
 	if (hr != S_OK)
 	{
 		CryLogAlways("ERROR: Capturing HUD failed: %i", hr);
@@ -730,6 +737,18 @@ void VRManager::FinishFrame()
 	m_wasBinocular = m_pGame->AreBinocularsActive();
 }
 
+vector2di VRManager::GetWinlatorBackbufferSize() const
+{
+	int w = GetSystemMetrics(SM_CXSCREEN);
+	int h = GetSystemMetrics(SM_CYSCREEN);
+	if (w <= 0 || h <= 0)
+	{
+		w = vr_window_width;
+		h = vr_window_height;
+	}
+	return vector2di(w, h);
+}
+
 vector2di VRManager::GetRenderSize() const
 {
 	if (!m_initialized)
@@ -737,13 +756,17 @@ vector2di VRManager::GetRenderSize() const
 
 	if (m_usingWinlatorXR)
 	{
-		// WinlatorXR doesn't report a recommended render target size, so the per-eye height is user
-		// configurable (Quest/Pico run the x86 game through Box64 - keep this modest) and the width
-		// follows the reported FOV aspect, same as the OpenVR path below.
+		// The eye is rendered at its true FOV aspect (~1.10) into the top-left of the full-screen back
+		// buffer via a viewport, captured, then anamorphically fit into its side-by-side half by the
+		// composite. Rendering at the FOV aspect keeps the horizontal/vertical FOV correct (a half's
+		// 0.89 aspect would render a too-narrow "scope" FOV). Height is the resolution knob; clamp so
+		// the eye fits in the back buffer.
+		vector2di backbuffer = GetWinlatorBackbufferSize();
 		int height = max(vr_winlatorxr_render_height, 240);
 		int width = (int)(height * m_horizontalFov / m_verticalFov);
-		// see WinlatorRenderScaleX(): horizontally oversampled so the side-by-side squeeze is lossless
-		return vector2di(width * WinlatorRenderScaleX(), height);
+		if (width > backbuffer.x) { height = height * backbuffer.x / width; width = backbuffer.x; }
+		if (height > backbuffer.y) { width = width * backbuffer.y / height; height = backbuffer.y; }
+		return vector2di(width, height);
 	}
 
 	uint32_t width, height;
