@@ -257,6 +257,16 @@ void VRRenderer::RenderSingleEye(int eye, ISystem* pSystem)
 			m_pGame->GetSystem()->GetITimer()->Enable(false);
 
 		pSystem->RenderBegin();
+		// Under WinlatorXR the back buffer is the whole X screen. Render this eye into the top-left
+		// GetRenderSize region (both eyes use the same region; each is captured before the next) so the
+		// engine only shades one eye's worth of pixels. Set after RenderBegin, which sets its own
+		// full-screen viewport.
+		if (gVR->IsUsingWinlatorXR())
+		{
+			vector2di rs = gVR->GetRenderSize();
+			D3DVIEWPORT9 vp = { 0, 0, (DWORD)rs.x, (DWORD)rs.y, 0.f, 1.f };
+			dxvkGetCreatedDevice()->SetViewport(&vp);
+		}
 		pSystem->Render();
 		DrawCrosshair();
 		if (gVR->vr_debug_draw_grip)
