@@ -448,12 +448,14 @@ void VRManager::CaptureEye(int eye)
 			return;
 	}
 
-	// acquire and copy the current swap chain buffer to the eye texture
+	// acquire and copy the current swap chain buffer to the eye texture. Under WinlatorXR the back
+	// buffer is the full X screen while the eye texture is one eye, so this is a downscale and must be
+	// filtered (POINT would alias badly); the SteamVR path is a 1:1 copy where POINT is fine.
 	ComPtr<IDirect3DSurface9> backBuffer;
 	m_d3d->device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, backBuffer.GetAddressOf());
 	ComPtr<IDirect3DSurface9> texSurface;
 	m_d3d->eyeTextures[eye]->GetSurfaceLevel(0, texSurface.GetAddressOf());
-	HRESULT hr = m_d3d->device->StretchRect(backBuffer.Get(), nullptr, texSurface.Get(), nullptr, D3DTEXF_POINT);
+	HRESULT hr = m_d3d->device->StretchRect(backBuffer.Get(), nullptr, texSurface.Get(), nullptr, m_usingWinlatorXR ? D3DTEXF_LINEAR : D3DTEXF_POINT);
 	if (hr != S_OK)
 	{
 		CryLogAlways("ERROR: Capturing HUD failed: %i", hr);
@@ -502,7 +504,7 @@ void VRManager::CaptureStereo(int eye)
 		dst.left = expectedSize.x / 2;
 		dst.right = expectedSize.x;
 	}
-	HRESULT hr = m_d3d->device->StretchRect(backBuffer.Get(), nullptr, texSurface.Get(), &dst, D3DTEXF_POINT);
+	HRESULT hr = m_d3d->device->StretchRect(backBuffer.Get(), nullptr, texSurface.Get(), &dst, m_usingWinlatorXR ? D3DTEXF_LINEAR : D3DTEXF_POINT);
 	if (hr != S_OK)
 	{
 		CryLogAlways("ERROR: Capturing stereo failed: %i", hr);
@@ -537,7 +539,7 @@ void VRManager::CaptureHUD()
 	m_d3d->device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, backBuffer.GetAddressOf());
 	ComPtr<IDirect3DSurface9> texSurface;
 	m_d3d->hudTexture->GetSurfaceLevel(0, texSurface.GetAddressOf());
-	HRESULT hr = m_d3d->device->StretchRect(backBuffer.Get(), nullptr, texSurface.Get(), nullptr, D3DTEXF_POINT);
+	HRESULT hr = m_d3d->device->StretchRect(backBuffer.Get(), nullptr, texSurface.Get(), nullptr, m_usingWinlatorXR ? D3DTEXF_LINEAR : D3DTEXF_POINT);
 	if (hr != S_OK)
 	{
 		CryLogAlways("ERROR: Capturing HUD failed: %i", hr);
@@ -728,6 +730,20 @@ void VRManager::FinishFrame()
 	PostSubmissionTransitionTexture(m_d3d->stereoTexture.Get(), origLayout[3]);
 
 	m_wasBinocular = m_pGame->AreBinocularsActive();
+}
+
+vector2di VRManager::GetWinlatorBackbufferSize() const
+{
+	int w = GetSystemMetrics(SM_CXSCREEN);
+	int h = GetSystemMetrics(SM_CYSCREEN);
+	if (w <= 0 || h <= 0)
+	{
+		w = vr_window_width;
+		h = vr_window_height;
+	}
+	// AER carries one full-resolution eye per frame, so the eye and the frame are the same size there.
+	// In SBS the frame is exactly the X screen (two eyes side by side).
+	return vector2di(w, h);
 }
 
 vector2di VRManager::GetRenderSize() const
