@@ -149,6 +149,15 @@ private:
 	void UpdateDesktopInputBlock();
 	bool m_desktopInputBlocked = false;
 
+	// main-pass viewport clamp state (see SetMainPassClamp / Hook_D3D9SetViewport)
+	bool m_mainPassClampActive = false;
+	int m_clampW = 0;
+	int m_clampH = 0;
+	int m_fullW = 0;
+	int m_fullH = 0;
+	// current eye/HUD offscreen render target the engine's back-buffer binding is redirected to (or null)
+	void* m_renderRedirectTarget = nullptr;
+
 	// calibrated standing head height minus the user's vr_height_offset (see there)
 	float GetEffectiveReferenceHeight() const { return m_referenceHeight - vr_height_offset; }
 
@@ -193,6 +202,12 @@ public:
 	int vr_winlatorxr_block_desktop_input;
 	int vr_winlatorxr_anamorphic;
 	int vr_winlatorxr_max_fps;
+	// Cap on the game's render resolution / back buffer under WinlatorXR (largest dimension, px; 0 = use
+	// the full X screen). The window still matches the X screen; the smaller back buffer is scaled up on
+	// present, keeping the aspect. WinlatorXR draws the X screen into a SQUARE per-eye framebuffer, so a
+	// square X screen avoids vertical stretch - but a full square X screen (e.g. 2560x2560) is too much
+	// 32-bit memory, hence this cap.
+	int vr_winlatorxr_max_render;
 
 	// Under WinlatorXR the final frame is side-by-side in a back buffer that is also the engine's
 	// render target, so a plain composite halves the horizontal resolution of each eye. With
@@ -203,9 +218,50 @@ public:
 
 	bool IsUsingWinlatorXR() const { return m_usingWinlatorXR; }
 	// The shared back buffer / present target under WinlatorXR is the whole X screen; each eye is
-	// rendered into its own half of it via a viewport (see VRRenderer::RenderSingleEye), so there is no
-	// side-by-side squeeze - the per-eye resolution equals GetRenderSize.
+	// rendered into the top-left GetRenderSize region of it, then captured and composited into its
+	// side-by-side half. This is only correct if the engine's main scene pass is actually confined to
+	// that region - Far Cry ignores a manual SetViewport, so the SetViewport hook rewrites the engine's
+	// full-screen viewport to the eye region while this clamp is active (see Hook_D3D9SetViewport).
 	vector2di GetWinlatorBackbufferSize() const;
+	// The game's render resolution / back buffer under WinlatorXR: the X screen scaled down so its
+	// largest dimension is at most vr_winlatorxr_max_render (aspect preserved). Present scales it back up
+	// to the window (= X screen). Keeps memory in the 32-bit budget while the displayed aspect is intact.
+	vector2di GetWinlatorRenderResolution() const;
+
+	// Enable/disable the main-pass viewport clamp for the current frame. Snapshots the eye region and the
+	// full back buffer size so the D3D SetViewport hook can run without recomputing them per call.
+	void SetMainPassClamp(bool on)
+	{
+		m_mainPassClampActive = on;
+		if (on)
+		{
+			vector2di rs = GetRenderSize();
+			m_clampW = rs.x; m_clampH = rs.y;
+			vector2di full = GetWinlatorBackbufferSize();
+			m_fullW = full.x; m_fullH = full.y;
+		}
+	}
+	// If the clamp is active, returns true and fills the eye region (w,h) and the full back buffer size
+	// (fullW,fullH) that identifies the engine's main-pass viewport to rewrite.
+	bool GetMainPassClamp(int* w, int* h, int* fullW, int* fullH) const
+	{
+		if (!m_mainPassClampActive)
+			return false;
+		*w = m_clampW; *h = m_clampH; *fullW = m_fullW; *fullH = m_fullH;
+		return true;
+	}
+
+	// The "proper" per-eye path: Far Cry derives the 3D FOV from the render-target shape, so a wide back
+	// buffer yields a squeezed/zoomed FOV regardless of the viewport. Instead we redirect the engine's
+	// back-buffer render target to an eye-shaped offscreen texture (correct FOV), then composite both
+	// eyes into the wide back buffer. The SetRenderTarget hook swaps the back buffer for this target
+	// while it is set; the SetViewport hook clamps the engine's full-screen viewport to fit it.
+	void SetRenderRedirect(void* surface) { m_renderRedirectTarget = surface; }
+	void* GetRenderRedirect() const { return m_renderRedirectTarget; }
+	// Ensure the eye / HUD render-target textures exist at the current GetRenderSize and return their
+	// surface (level 0, borrowed pointer). Used by VRRenderer to bind them as the engine's render target.
+	void* GetEyeRenderSurface(int eye);
+	void* GetHudRenderSurface();
 
 	// Alternate-eye rendering (WinlatorXR mode3d=2): every frame carries ONE eye at the full frame
 	// resolution and WinlatorXR keeps a framebuffer + pose per eye. Doubles per-eye pixels compared

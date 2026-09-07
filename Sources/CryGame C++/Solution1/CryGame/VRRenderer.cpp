@@ -29,12 +29,74 @@ BOOL __stdcall Hook_SetWindowPos(HWND hWnd, HWND hWndInsertAfter, int  X, int  Y
 	return TRUE;
 }
 
+// Cached raw pointer to the current swap-chain back buffer surface, used by Hook_D3D9SetViewport to tell
+// the main back-buffer pass from equally-sized offscreen render targets without a per-call GetBackBuffer
+// (a guest->dxvk COM round-trip that is expensive under Box64). dxvk hands back a stable wrapper for the
+// back buffer; refreshed once per frame in Present so a resolution change / device reset is picked up on
+// the next frame. Only ever compared, never dereferenced or kept referenced.
+static IDirect3DSurface9* s_backBufferForClamp = nullptr;
+
 HRESULT __stdcall Hook_D3D9Present(IDirect3DDevice9Ex* pSelf, const RECT* pSourceRect, const RECT* pDestRect, HWND hDestWindowOverride, const RGNDATA* pDirtyRegion)
 {
+	{
+		IDirect3DSurface9* bb = nullptr;
+		if (SUCCEEDED(pSelf->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) && bb)
+		{
+			s_backBufferForClamp = bb;
+			bb->Release();
+		}
+	}
 	gVRRenderer->OnPrePresent();
 	HRESULT result = hooks::CallOriginal(Hook_D3D9Present)(pSelf, pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion);
 	gVRRenderer->OnPostPresent();
 	return result;
+}
+
+// Under WinlatorXR the "proper" per-eye path renders each eye into an eye-shaped offscreen render target
+// (so Far Cry's render-target-driven FOV comes out correct), then composites both into the wide back
+// buffer. Two hooks make the engine cooperate without engine source:
+//  - Hook_D3D9SetRenderTarget redirects the engine's back-buffer binding to the current eye/HUD target.
+//  - Hook_D3D9SetViewport clamps the engine's full-screen viewport down to fit that eye-shaped target.
+// Both no-op on the PC/OpenVR path and whenever no redirect is active (e.g. the composite, the menu).
+HRESULT __stdcall Hook_D3D9SetRenderTarget(IDirect3DDevice9Ex* pSelf, DWORD renderTargetIndex, IDirect3DSurface9* pRenderTarget)
+{
+	if (renderTargetIndex == 0 && pRenderTarget != nullptr && gVR && gVR->IsUsingWinlatorXR())
+	{
+		IDirect3DSurface9* redirect = (IDirect3DSurface9*)gVR->GetRenderRedirect();
+		if (redirect != nullptr && s_backBufferForClamp != nullptr && pRenderTarget == s_backBufferForClamp)
+		{
+			return hooks::CallOriginal(Hook_D3D9SetRenderTarget)(pSelf, renderTargetIndex, redirect);
+		}
+	}
+	return hooks::CallOriginal(Hook_D3D9SetRenderTarget)(pSelf, renderTargetIndex, pRenderTarget);
+}
+
+HRESULT __stdcall Hook_D3D9SetViewport(IDirect3DDevice9Ex* pSelf, const D3DVIEWPORT9* pViewport)
+{
+	int cw = 0, ch = 0, fullW = 0, fullH = 0;
+	if (pViewport && gVR && gVR->IsUsingWinlatorXR() && gVR->GetMainPassClamp(&cw, &ch, &fullW, &fullH)
+		&& cw > 0 && ch > 0 && (int)pViewport->Width > cw)
+	{
+		// the eye/HUD offscreen target is the current render target during those passes; a viewport wider
+		// than it (the engine still thinks it is drawing full-screen) must be clamped down to fit it
+		IDirect3DSurface9* redirect = (IDirect3DSurface9*)gVR->GetRenderRedirect();
+		IDirect3DSurface9* rt = nullptr;
+		bool onEyeTarget = false;
+		if (redirect && SUCCEEDED(pSelf->GetRenderTarget(0, &rt)) && rt)
+		{
+			onEyeTarget = (rt == redirect);
+			rt->Release();
+		}
+		if (onEyeTarget)
+		{
+			D3DVIEWPORT9 vp = *pViewport;
+			vp.X = 0; vp.Y = 0;
+			vp.Width = (DWORD)cw;
+			vp.Height = (DWORD)ch;
+			return hooks::CallOriginal(Hook_D3D9SetViewport)(pSelf, &vp);
+		}
+	}
+	return hooks::CallOriginal(Hook_D3D9SetViewport)(pSelf, pViewport);
 }
 
 void __fastcall Hook_Renderer_SetCamera(IRenderer* pSelf, void* notUsed, const CCamera& cam)
@@ -67,6 +129,10 @@ void VRRenderer::Init(CXGame *game)
 	CryLogAlways("Initializing rendering function hooks");
 	hooks::InstallHook("SetWindowPos", &SetWindowPos, &Hook_SetWindowPos);
 	hooks::InstallVirtualFunctionHook("IDirect3DDevice9Ex::Present", device, 17, &Hook_D3D9Present);
+	// IDirect3DDevice9 vtable: SetRenderTarget is slot 37, SetViewport is slot 47. Together they route the
+	// engine's main scene + HUD passes into the eye-shaped offscreen targets under WinlatorXR.
+	hooks::InstallVirtualFunctionHook("IDirect3DDevice9Ex::SetRenderTarget", device, 37, &Hook_D3D9SetRenderTarget);
+	hooks::InstallVirtualFunctionHook("IDirect3DDevice9Ex::SetViewport", device, 47, &Hook_D3D9SetViewport);
 	hooks::InstallVirtualFunctionHook("IRenderer::SetCamera", m_pGame->m_pRenderer, 36, &Hook_Renderer_SetCamera);
 }
 
@@ -86,6 +152,11 @@ void VRRenderer::Render(ISystem* pSystem)
 		player->UpdateVRTransformsPreRender();
 	}
 
+	// Per-eye path: arm the viewport clamp so the SetViewport hook can shrink the engine's full-screen
+	// viewport to fit the eye-shaped render targets we bind in RenderSingleEye / the HUD phase.
+	// ComposeWinlatorXRFrame disarms it (and the redirect) before compositing.
+	gVR->SetMainPassClamp(UsePerEyeRenderTargets());
+
 	if (gVR->UseWinlatorAER())
 	{
 		// alternate-eye rendering: only the eye this frame carries (see VRManager::ComposeWinlatorXRFrame)
@@ -96,6 +167,18 @@ void VRRenderer::Render(ISystem* pSystem)
 		for (int eye = 0; eye < 2; ++eye)
 		{
 			RenderSingleEye(eye, pSystem);
+		}
+	}
+
+	// Per-eye path: route the upcoming HUD/2D pass into the eye-shaped HUD texture (same reason as the
+	// eyes: correct shape) so it composites cleanly into each half. The engine draws the actual HUD after
+	// this function returns; the redirect stays active until ComposeWinlatorXRFrame clears it.
+	if (UsePerEyeRenderTargets())
+	{
+		if (IDirect3DSurface9* hudSurf = (IDirect3DSurface9*)gVR->GetHudRenderSurface())
+		{
+			gVR->SetRenderRedirect(hudSurf);
+			dxvkGetCreatedDevice()->SetRenderTarget(0, hudSurf);
 		}
 	}
 
@@ -155,7 +238,10 @@ void VRRenderer::Render(ISystem* pSystem)
 
 void VRRenderer::OnPrePresent()
 {
-	gVR->CaptureHUD();
+	// In the per-eye path the HUD was rendered straight into the HUD texture (see Render()), so there is
+	// nothing to capture; otherwise grab it from the back buffer as before.
+	if (!UsePerEyeRenderTargets())
+		gVR->CaptureHUD();
 	gVR->MirrorEyeToBackBuffer();
 }
 
@@ -241,6 +327,12 @@ bool VRRenderer::ShouldRenderStereo() const
 	return m_pGame->IsCutSceneActive() && gVR->vr_cutscenes_cinema_mode == 2;
 }
 
+bool VRRenderer::UsePerEyeRenderTargets() const
+{
+	return gVR->IsUsingWinlatorXR() && !gVR->UseWinlatorAER()
+		&& ShouldRenderVR() && !ShouldRender2D() && !m_pGame->IsInMenu();
+}
+
 void VRRenderer::RenderSingleEye(int eye, ISystem* pSystem)
 {
 	CCamera eyeCam = m_originalViewCamera;
@@ -248,6 +340,22 @@ void VRRenderer::RenderSingleEye(int eye, ISystem* pSystem)
 	pSystem->SetViewCamera(eyeCam);
 	m_viewCamOverridden = true;
 	//m_pGame->m_pRenderer->EF_Query(EFQ_DrawNearFov, (INT_PTR)&fov);
+
+	// Per-eye path: bind this eye's eye-shaped offscreen texture as the engine's render target so its
+	// FOV (which follows the render-target shape) comes out correct, and the engine renders straight into
+	// the texture we later composite - no separate capture needed. The redirect stays active so the
+	// engine's own back-buffer re-binds during the scene pass are also routed here.
+	bool perEyeRT = UsePerEyeRenderTargets();
+	IDirect3DSurface9* eyeSurf = perEyeRT ? (IDirect3DSurface9*)gVR->GetEyeRenderSurface(eye) : nullptr;
+	if (perEyeRT && eyeSurf)
+	{
+		gVR->SetRenderRedirect(eyeSurf);
+		dxvkGetCreatedDevice()->SetRenderTarget(0, eyeSurf);
+	}
+	else
+	{
+		perEyeRT = false;
+	}
 
 	m_pGame->m_pRenderer->ClearColorBuffer(Vec3(0, 0, 0));
 
@@ -257,16 +365,6 @@ void VRRenderer::RenderSingleEye(int eye, ISystem* pSystem)
 			m_pGame->GetSystem()->GetITimer()->Enable(false);
 
 		pSystem->RenderBegin();
-		// Under WinlatorXR the back buffer is the whole X screen. Render this eye into the top-left
-		// GetRenderSize region (both eyes use the same region; each is captured before the next) so the
-		// engine only shades one eye's worth of pixels. Set after RenderBegin, which sets its own
-		// full-screen viewport.
-		if (gVR->IsUsingWinlatorXR())
-		{
-			vector2di rs = gVR->GetRenderSize();
-			D3DVIEWPORT9 vp = { 0, 0, (DWORD)rs.x, (DWORD)rs.y, 0.f, 1.f };
-			dxvkGetCreatedDevice()->SetViewport(&vp);
-		}
 		pSystem->Render();
 		DrawCrosshair();
 		if (gVR->vr_debug_draw_grip)
@@ -282,7 +380,9 @@ void VRRenderer::RenderSingleEye(int eye, ISystem* pSystem)
 	pSystem->SetViewCamera(m_originalViewCamera);
 	m_viewCamOverridden = false;
 
-	gVR->CaptureEye(eye);
+	if (!perEyeRT)
+		gVR->CaptureEye(eye);
+	// else: the eye was rendered directly into its texture (m_d3d->eyeTextures[eye])
 }
 
 void VRRenderer::DrawCrosshair()

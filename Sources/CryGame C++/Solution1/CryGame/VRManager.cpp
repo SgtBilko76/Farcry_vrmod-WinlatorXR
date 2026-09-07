@@ -449,8 +449,9 @@ void VRManager::CaptureEye(int eye)
 	}
 
 	// acquire and copy the current swap chain buffer to the eye texture. Under WinlatorXR the eye was
-	// rendered into its own half of the full-screen back buffer (see RenderSingleEye's viewport), so
-	// copy exactly that half (1:1, no scale).
+	// rendered into the top-left GetRenderSize region of the full-screen back buffer (the engine's own
+	// full-screen viewport is rewritten to that region by the SetViewport hook, see VRRenderer's
+	// Hook_D3D9SetViewport), so copy exactly that region 1:1 (POINT, no scale).
 	ComPtr<IDirect3DSurface9> backBuffer;
 	m_d3d->device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, backBuffer.GetAddressOf());
 	ComPtr<IDirect3DSurface9> texSurface;
@@ -749,6 +750,19 @@ vector2di VRManager::GetWinlatorBackbufferSize() const
 	return vector2di(w, h);
 }
 
+vector2di VRManager::GetWinlatorRenderResolution() const
+{
+	vector2di s = GetWinlatorBackbufferSize();
+	int cap = vr_winlatorxr_max_render;
+	if (cap > 0 && (s.x > cap || s.y > cap))
+	{
+		float scale = min((float)cap / s.x, (float)cap / s.y);
+		s.x = max(1, (int)(s.x * scale));
+		s.y = max(1, (int)(s.y * scale));
+	}
+	return s;
+}
+
 vector2di VRManager::GetRenderSize() const
 {
 	if (!m_initialized)
@@ -756,12 +770,11 @@ vector2di VRManager::GetRenderSize() const
 
 	if (m_usingWinlatorXR)
 	{
-		// The eye is rendered at its true FOV aspect (~1.10) into the top-left of the full-screen back
-		// buffer via a viewport, captured, then anamorphically fit into its side-by-side half by the
-		// composite. Rendering at the FOV aspect keeps the horizontal/vertical FOV correct (a half's
-		// 0.89 aspect would render a too-narrow "scope" FOV). Height is the resolution knob; clamp so
-		// the eye fits in the back buffer.
-		vector2di backbuffer = GetWinlatorBackbufferSize();
+		// The eye is rendered at its true FOV aspect (~1.10) into an eye-shaped offscreen target, then
+		// composited into its side-by-side half. Rendering at the FOV aspect keeps the horizontal/vertical
+		// FOV correct. Height is the resolution knob; clamp so the eye fits in the (possibly capped) back
+		// buffer.
+		vector2di backbuffer = GetWinlatorRenderResolution();
 		int height = max(vr_winlatorxr_render_height, 240);
 		int width = (int)(height * m_horizontalFov / m_verticalFov);
 		if (width > backbuffer.x) { height = height * backbuffer.x / width; width = backbuffer.x; }
@@ -1384,6 +1397,59 @@ void VRManager::CreateStereoTexture()
 	CryLogAlways("CreateRenderTarget return code: %i", hr);
 }
 
+void* VRManager::GetEyeRenderSurface(int eye)
+{
+	if (!m_d3d->device || eye < 0 || eye > 1)
+		return nullptr;
+	vector2di size = GetRenderSize();
+	bool needCreate = !m_d3d->eyeTextures[eye];
+	if (!needCreate)
+	{
+		D3DSURFACE_DESC desc;
+		m_d3d->eyeTextures[eye]->GetLevelDesc(0, &desc);
+		if ((int)desc.Width != size.x || (int)desc.Height != size.y)
+			needCreate = true;
+	}
+	if (needCreate)
+	{
+		CreateEyeTexture(eye);
+		if (!m_d3d->eyeTextures[eye])
+			return nullptr;
+	}
+	// borrowed pointer: the surface is owned by the texture, which outlives this frame's use
+	IDirect3DSurface9* surf = nullptr;
+	m_d3d->eyeTextures[eye]->GetSurfaceLevel(0, &surf);
+	if (surf)
+		surf->Release();
+	return surf;
+}
+
+void* VRManager::GetHudRenderSurface()
+{
+	if (!m_d3d->device)
+		return nullptr;
+	vector2di size = GetRenderSize();
+	bool needCreate = !m_d3d->hudTexture;
+	if (!needCreate)
+	{
+		D3DSURFACE_DESC desc;
+		m_d3d->hudTexture->GetLevelDesc(0, &desc);
+		if ((int)desc.Width != size.x || (int)desc.Height != size.y)
+			needCreate = true;
+	}
+	if (needCreate)
+	{
+		CreateHUDTexture();
+		if (!m_d3d->hudTexture)
+			return nullptr;
+	}
+	IDirect3DSurface9* surf = nullptr;
+	m_d3d->hudTexture->GetSurfaceLevel(0, &surf);
+	if (surf)
+		surf->Release();
+	return surf;
+}
+
 void VRManager::PrepareTextureForSubmission(IDirect3DTexture9* tex, vr::VRVulkanTextureData_t& vkTexData, VkImageLayout& origLayout)
 {
 	if (!tex)
@@ -1418,6 +1484,7 @@ void VRManager::RegisterCVars()
 	// NOTE: anamorphic rendering deadlocked the game on the Quest 3 in testing (first frame never presents), so it is off by default until that is understood
 	console->Register("vr_winlatorxr_anamorphic", &vr_winlatorxr_anamorphic, 0, VF_DUMPTODISK, "Under WinlatorXR, render each eye at double horizontal resolution so the side-by-side frame keeps full per-eye detail (experimental, costs GPU time; 0 = off)");
 	console->Register("vr_winlatorxr_max_fps", &vr_winlatorxr_max_fps, 0, VF_DUMPTODISK, "Under WinlatorXR, frame-rate cap applied via dxvk's limiter (0 = uncapped; WinlatorXR's own 72 fps cap quantises the game to 36/18 fps)");
+	console->Register("vr_winlatorxr_max_render", &vr_winlatorxr_max_render, 1920, VF_DUMPTODISK, "Cap on the game's render resolution / back buffer under WinlatorXR (largest dimension in px; 0 = full X screen). The window still matches the X screen and the smaller back buffer is scaled up on present (aspect preserved). Use a square X screen to avoid WinlatorXR's vertical stretch; this cap keeps a big square screen within the 32-bit memory budget");
 	console->Register("vr_winlatorxr_aer", &vr_winlatorxr_aer, 0, VF_DUMPTODISK, "Under WinlatorXR, use alternate-eye rendering: one full-resolution eye per frame instead of side-by-side (sharper and cheaper per frame, but each eye updates at half rate)");
 	console->Register("vr_winlatorxr_block_desktop_input", &vr_winlatorxr_block_desktop_input, 1, VF_DUMPTODISK, "Under WinlatorXR, ignore the mouse/keyboard that WinlatorXR emulates from the controllers while motion controls are active (they would double-trigger actions)");
 	console->Register("vr_mirrored_eye", &vr_mirrored_eye, 1, VF_DUMPTODISK, "Which eye view is mirrored to the desktop window. 0 - left, 1 - right");
@@ -1642,6 +1709,11 @@ void VRManager::ComposeWinlatorXRFrame()
 	if (!m_d3d->device)
 		return;
 
+	// The eye and HUD passes are done by now; stop rewriting full-screen viewports and stop redirecting
+	// the engine's render target, so the composite below draws into the real back buffer.
+	SetMainPassClamp(false);
+	SetRenderRedirect(nullptr);
+
 	// Decide what this frame is. The back buffer currently holds whatever the engine rendered last:
 	// in VR mode that is the HUD over a transparent clear (the eyes live in m_d3d->eyeTextures),
 	// in the 2D modes (binoculars, scopes, cinema) it is the flat game image plus HUD.
@@ -1668,6 +1740,10 @@ void VRManager::ComposeWinlatorXRFrame()
 	int width = bbDesc.Width;
 	int height = bbDesc.Height;
 	int halfWidth = width / 2;
+
+	// the per-eye/HUD passes left one of our offscreen textures bound as the render target; bind the real
+	// back buffer so the composite lands where WinlatorXR reads it
+	m_d3d->device->SetRenderTarget(0, backBuffer.Get());
 
 	m_pGame->m_pRenderer->ResetToDefault();
 

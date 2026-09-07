@@ -25,6 +25,10 @@ public:
 	bool ShouldRender2D() const;
 	bool ShouldRenderStereo() const;
 
+	// true when this frame uses the per-eye offscreen-render-target path under WinlatorXR (correct FOV
+	// via eye-shaped targets, composited into the wide back buffer). False for AER, 2D modes and the menu.
+	bool UsePerEyeRenderTargets() const;
+
 	bool ShouldIgnoreWindowSizeChanges() const { return m_ignoreWindowSizeChanges; }
 
 private:
