@@ -514,7 +514,8 @@ void VRInput::UpdateWinlatorXRActions()
 	bool menuButton = state.lMenu; // the dedicated menu button only exists on the left controller
 
 	// --- /actions/default ---
-	SetWxrDigital(WXR_MENU, offUpper || menuButton);
+	// menu only on the dedicated left menu button, freeing the off-hand upper face button (Y) for grenades
+	SetWxrDigital(WXR_MENU, menuButton);
 	SetWxrDigital(WXR_USE, offTrigger);
 	SetWxrDigital(WXR_BINOCULARS, offLower);
 	// dominant stick as a d-pad (80% deadzone in the Touch bindings)
@@ -546,9 +547,12 @@ void VRInput::UpdateWinlatorXRActions()
 
 	// --- /actions/weapons ---
 	SetWxrDigital(WXR_FIRE, domTrigger);
-	SetWxrDigital(WXR_NEXT, domStickClick);
+	// weapon switch on the dominant upper face button (B, tap = next / hold = drop); grenades on the
+	// off-hand upper face button (Y, tap = cycle / hold = throw). The dominant thumbstick click is left
+	// UNBOUND on purpose so WinlatorXR can use it for its own menu/mode toggle.
+	SetWxrDigital(WXR_NEXT, domUpper);
 	SetWxrDigital(WXR_RELOAD, domLower);
-	SetWxrDigital(WXR_GRENADES, domUpper);
+	SetWxrDigital(WXR_GRENADES, offUpper);
 }
 
 void VRInput::QueryDigital(vr::VRActionHandle_t action, vr::VRInputValueHandle_t restrictToDevice, vr::InputDigitalActionData_t& out)
