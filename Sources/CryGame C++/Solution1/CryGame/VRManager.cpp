@@ -774,6 +774,12 @@ vector2di VRManager::GetRenderSize() const
 		// composited into its side-by-side half. Rendering at the FOV aspect keeps the horizontal/vertical
 		// FOV correct. Height is the resolution knob; clamp so the eye fits in the (possibly capped) back
 		// buffer.
+		//
+		// ASPECT RULE (headset config, not this function): the WinlatorXR X-screen / container screenSize
+		// MUST keep this same ~1.10 FOV aspect (width/height == m_horizontalFov/m_verticalFov, e.g.
+		// 1792x1624 or 1591x1440). WinlatorXR draws the X-screen into a SQUARE per-eye framebuffer, so a
+		// near-square screen (e.g. 1660x1600) is displayed squeezed. Do not exceed ~1792 wide either: the
+		// 32-bit game process runs out of address space around 1856+ and crashes.
 		vector2di backbuffer = GetWinlatorRenderResolution();
 		int height = max(vr_winlatorxr_render_height, 240);
 		int width = (int)(height * m_horizontalFov / m_verticalFov);
