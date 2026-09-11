@@ -373,6 +373,50 @@ void VRManager::Update()
 		m_curWindowWidth = wantedWindowWidth;
 		m_curWindowHeight = wantedWindowHeight;
 	}
+
+	// Keep the game window borderless and pinned to (0,0) every frame - Far Cry / the Winlator window
+	// manager can re-decorate or re-position it, which would move the frame-sync pixel off screen (0,0)
+	// and make WinlatorXR stop rendering the stereo view. EnsureWinlatorXRWindow only acts when it drifts.
+	if (m_usingWinlatorXR)
+	{
+		// the window hook may not have found the game window at device-init time (varies by Winlator
+		// build), so keep retrying here until it does - then EnsureWinlatorXRWindow can act on it.
+		if (!m_winlatorWindow && m_d3d->device.Get())
+			InstallWinlatorXRWindowHook(m_d3d->device.Get());
+		EnsureWinlatorXRWindow(wantedWindowWidth, wantedWindowHeight);
+	}
+}
+
+void VRManager::EnsureWinlatorXRWindow(int width, int height)
+{
+	HWND hWnd = (HWND)m_winlatorWindow;
+	if (!hWnd || width <= 0 || height <= 0)
+		return;
+
+	// borderless popup: strip the title bar / frame / system menu so nothing offsets the client area
+	LONG_PTR style = GetWindowLongPtrA(hWnd, GWL_STYLE);
+	LONG_PTR wantedStyle = (style & ~(WS_CAPTION | WS_THICKFRAME | WS_BORDER | WS_DLGFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)) | WS_POPUP | WS_VISIBLE;
+	bool styleChanged = wantedStyle != style;
+	if (styleChanged)
+		SetWindowLongPtrA(hWnd, GWL_STYLE, wantedStyle);
+
+	LONG_PTR exStyle = GetWindowLongPtrA(hWnd, GWL_EXSTYLE);
+	LONG_PTR wantedEx = exStyle & ~(WS_EX_CLIENTEDGE | WS_EX_WINDOWEDGE | WS_EX_DLGMODALFRAME | WS_EX_STATICEDGE);
+	if (wantedEx != exStyle)
+	{
+		SetWindowLongPtrA(hWnd, GWL_EXSTYLE, wantedEx);
+		styleChanged = true;
+	}
+
+	RECT r;
+	bool geometryWrong = !GetWindowRect(hWnd, &r) || r.left != 0 || r.top != 0
+		|| (r.right - r.left) != width || (r.bottom - r.top) != height;
+	if (styleChanged || geometryWrong)
+	{
+		SetWindowPos(hWnd, HWND_TOP, 0, 0, width, height, SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE);
+		CryLogAlways("[WinlatorXR] forced game window borderless at (0,0) %dx%d (was %ld,%ld %ldx%ld style=0x%llx)",
+			width, height, (long)r.left, (long)r.top, (long)(r.right - r.left), (long)(r.bottom - r.top), (unsigned long long)style);
+	}
 }
 
 void VRManager::AwaitFrame()
@@ -1870,6 +1914,10 @@ void VRManager::InstallWinlatorXRWindowHook(IDirect3DDevice9Ex* device)
 		hWnd = params.hFocusWindow;
 	if (!hWnd)
 		hWnd = GetActiveWindow();
+	if (!hWnd)
+		hWnd = FindWindowA(nullptr, "Far Cry");
+	if (!hWnd)
+		hWnd = GetForegroundWindow();
 	if (!hWnd || hWnd == s_winlatorHookedWnd)
 		return;
 
@@ -1881,7 +1929,11 @@ void VRManager::InstallWinlatorXRWindowHook(IDirect3DDevice9Ex* device)
 	}
 	s_winlatorOrigWndProc = prev;
 	s_winlatorHookedWnd = hWnd;
+	m_winlatorWindow = hWnd;
 	CryLogAlways("[WinlatorXR] subclassed game window 0x%p - mouse wheel messages are dropped", hWnd);
+
+	// immediately make it borderless + top-left so the frame-sync pixel lands at screen (0,0)
+	EnsureWinlatorXRWindow(GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
 }
 
 void VRManager::UpdateDesktopInputBlock()

@@ -146,6 +146,13 @@ private:
 	// window procedure under Wine. So: subclass the game window to drop wheel messages, and disable
 	// keyboard/mouse gameplay actions while motion controls are in charge.
 	void InstallWinlatorXRWindowHook(IDirect3DDevice9Ex* device);
+	// Force the game window borderless and pinned to the X-screen top-left (0,0) at full size. WinlatorXR
+	// reads the frame-sync pixel at screen (0,0) and STOPS rendering the stereo view if it can't find it;
+	// a title bar / decoration or an offset window (as on public Winlator builds) shifts our composited
+	// frame so the sync pixel no longer sits at (0,0). Re-asserted each frame - cheap, only acts on drift.
+	void EnsureWinlatorXRWindow(int width, int height);
+	// HWND of the game window (as void* to keep windows.h out of the header); set by the window hook.
+	void* m_winlatorWindow = nullptr;
 	void UpdateDesktopInputBlock();
 	bool m_desktopInputBlocked = false;
 
