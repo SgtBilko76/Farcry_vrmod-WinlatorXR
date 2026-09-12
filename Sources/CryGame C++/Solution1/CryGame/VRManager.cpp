@@ -697,13 +697,22 @@ void VRManager::FinishFrame()
 	{
 		// the frame itself was already composed into the back buffer by ComposeWinlatorXRFrame (called
 		// from the pre-present hook); all that is left is telling WinlatorXR how to display it.
-		// fov 0/0 = "keep the headset's native FOV", which WinlatorXR then reports back to us in every
-		// packet and which is what our cameras render with (see UpdateWinlatorXRPose).
+		// FOV: send the headset's native FOV back explicitly (scaled by vr_winlatorxr_fov_scale, default 1.0
+		// = unchanged) so WinlatorXR displays the frame with exactly the FOV our cameras render with - no
+		// scale change. We send the LATCHED native value (not the live reported one, which is just our own
+		// echo), so the value is constant frame to frame and does not drift. Fall back to 0/0 (= native)
+		// until the native FOV has been latched from the first packet.
+		float sendFovX = 0.f, sendFovY = 0.f;
+		if (m_winlatorNativeFovH > 1.f && m_winlatorNativeFovV > 1.f)
+		{
+			sendFovX = m_winlatorNativeFovH * vr_winlatorxr_fov_scale;
+			sendFovY = m_winlatorNativeFovV * vr_winlatorxr_fov_scale;
+		}
 		// controller vibration: WinlatorXR treats the values as a per-frame level (with its own decay),
 		// so just forward whatever amplitude VRHaptics last asked for
 		float lHaptics = m_inputReady ? m_input.GetWinlatorHapticAmplitude(0) : 0.f;
 		float rHaptics = m_inputReady ? m_input.GetWinlatorHapticAmplitude(1) : 0.f;
-		WinlatorXR::SendState(lHaptics, rHaptics, m_winlatorModeVr, m_winlatorMode3d, 0.f, 0.f);
+		WinlatorXR::SendState(lHaptics, rHaptics, m_winlatorModeVr, m_winlatorMode3d, sendFovX, sendFovY);
 		m_wasBinocular = m_pGame->AreBinocularsActive();
 		// alternate-eye rendering: next frame renders and carries the other eye
 		if (UseWinlatorAER())
@@ -1536,6 +1545,7 @@ void VRManager::RegisterCVars()
 	console->Register("vr_winlatorxr_max_fps", &vr_winlatorxr_max_fps, 0, VF_DUMPTODISK, "Under WinlatorXR, frame-rate cap applied via dxvk's limiter (0 = uncapped; WinlatorXR's own 72 fps cap quantises the game to 36/18 fps)");
 	console->Register("vr_winlatorxr_max_render", &vr_winlatorxr_max_render, 1920, VF_DUMPTODISK, "Cap on the game's render resolution / back buffer under WinlatorXR (largest dimension in px; 0 = full X screen). The window still matches the X screen and the smaller back buffer is scaled up on present (aspect preserved). Use a square X screen to avoid WinlatorXR's vertical stretch; this cap keeps a big square screen within the 32-bit memory budget");
 	console->Register("vr_winlatorxr_aer", &vr_winlatorxr_aer, 1, VF_DUMPTODISK, "Under WinlatorXR, use alternate-eye rendering: one full-resolution eye per frame instead of side-by-side (sharper and cheaper per frame, but each eye updates at half rate)");
+	console->Register("vr_winlatorxr_fov_scale", &vr_winlatorxr_fov_scale, 1.0f, VF_DUMPTODISK, "Multiplier applied to the headset's native FOV before we send it back to WinlatorXR as the display projection. 1.0 = use the native XrAPI FOV unchanged (no scale change; rendered FOV == displayed FOV). WinlatorXR uses the value directly (no extra scale of its own). <1 zooms out, >1 zooms in");
 	console->Register("vr_winlatorxr_block_desktop_input", &vr_winlatorxr_block_desktop_input, 1, VF_DUMPTODISK, "Under WinlatorXR, ignore the mouse/keyboard that WinlatorXR emulates from the controllers while motion controls are active (they would double-trigger actions)");
 	console->Register("vr_mirrored_eye", &vr_mirrored_eye, 1, VF_DUMPTODISK, "Which eye view is mirrored to the desktop window. 0 - left, 1 - right");
 	console->Register("vr_melee_swing_threshold", &vr_melee_swing_threshold, 2.f, VF_CHEAT, "Configures speed threshold for physical swings to register as melee attacks");
@@ -1645,6 +1655,14 @@ void VRManager::UpdateWinlatorXRPose()
 	// symmetric FOV as reported by the headset runtime (degrees); ignore obviously bogus values
 	if (state.fovH >= 40.f && state.fovH <= 150.f && state.fovV >= 40.f && state.fovV <= 150.f)
 	{
+		// Latch the TRUE native FOV from the very first packet only. WinlatorXR echoes back whatever FOV we
+		// send (see FinishFrame), so from frame 2 on state.fovH is our own echo, not the headset's native -
+		// latching once keeps FinishFrame's send stable instead of feeding a shrink/grow loop.
+		if (m_winlatorNativeFovH <= 1.f || m_winlatorNativeFovV <= 1.f)
+		{
+			m_winlatorNativeFovH = state.fovH;
+			m_winlatorNativeFovV = state.fovV;
+		}
 		float horz = tanf(DEG2RAD(state.fovH) / 2.f);
 		float vert = tanf(DEG2RAD(state.fovV) / 2.f);
 		if (fabsf(horz - m_horizontalFov) > 1e-3f || fabsf(vert - m_verticalFov) > 1e-3f)

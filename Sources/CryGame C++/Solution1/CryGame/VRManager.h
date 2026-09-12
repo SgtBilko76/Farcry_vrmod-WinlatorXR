@@ -111,6 +111,12 @@ private:
 	Matrix34 GetEyeToHeadTransform(int eye);
 	// distance between the eyes as reported by WinlatorXR, in metres
 	float m_winlatorEyeSeparation = 0.064f;
+	// the headset's TRUE native per-eye FOV (degrees, 0 = not seen yet). Latched from the FIRST packet only:
+	// WinlatorXR echoes back whatever FOV we send as the "reported" FOV, so any later value may be our own
+	// echo, not the native one. We send this latched value back (x vr_winlatorxr_fov_scale) every frame so
+	// the projection is stable and 1:1 with what our cameras render - see FinishFrame.
+	float m_winlatorNativeFovH = 0.f;
+	float m_winlatorNativeFovV = 0.f;
 	bool m_winlatorPoseLogged = false;
 	// HMD_SYNC id of the packet whose pose was used for the current frame; painted into the frame-sync
 	// pixel so WinlatorXR can pick the matching pose when it reprojects our image (see ComposeWinlatorXRFrame)
@@ -215,6 +221,11 @@ public:
 	// square X screen avoids vertical stretch - but a full square X screen (e.g. 2560x2560) is too much
 	// 32-bit memory, hence this cap.
 	int vr_winlatorxr_max_render;
+	// Multiplier applied to the headset's native FOV before we send it back to WinlatorXR as the projection
+	// it displays our frame with. 1.0 = use the native XrAPI FOV unchanged (no scale change - recommended).
+	// WinlatorXR uses the value we send directly (it does NOT apply its own scale on top), and our cameras
+	// render with that same FOV, so at 1.0 rendered FOV == displayed FOV == native. <1 zooms out, >1 in.
+	float vr_winlatorxr_fov_scale;
 
 	// Under WinlatorXR the final frame is side-by-side in a back buffer that is also the engine's
 	// render target, so a plain composite halves the horizontal resolution of each eye. With
