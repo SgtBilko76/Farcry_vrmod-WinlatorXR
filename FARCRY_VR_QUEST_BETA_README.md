@@ -62,7 +62,7 @@ In WinlatorXR → **Containers** tab → **add a new container** (it'll be
 
 | Setting | Value | Why |
 |---|---|---|
-| **Screen size** | `1792x1624` | Sharp; **aspect must be ~1.10** (see note) |
+| **Screen size** | `1591x1440` | Recommended; **aspect must be ~1.10** (see note) |
 | **Graphics driver** | wrapper / Turnip | The Adreno wrapper the fork ships |
 | **DX wrapper** | **DXVK** | Direct3D 9 → Vulkan |
 | **Drive `D:`** | `/sdcard/Download` | So `D:\FarCry` resolves — **essential** |
@@ -90,17 +90,26 @@ boot — if it reads as off-face, the Quest suspends the app and it freezes.
 | Setting | Value | Notes |
 |---|---|---|
 | `vr_winlatorxr_aer` | `1` | **Alternate-eye rendering** — full resolution per eye |
-| `vr_winlatorxr_render_height` | `1624` | Pair with the `1792` screen |
+| `vr_winlatorxr_render_height` | `1440` | Pair with the `1591` screen |
 | `vr_seated_mode` | `1` | Comfortable; crouch with the button, not physically |
 | `vr_height_offset` | `0.30` | Eye-height tweak (metres). Adjust to taste |
 | `vr_snap_turn_amount` | `45` | 45° snap turn |
-| screen (`.desktop`) | `1792x1624` | Sharp preset |
+| screen (`.desktop`) | `1591x1440` | Recommended preset |
+| `vr_render_force_max_terrain_detail` | `0` | Off = coarser distant terrain, better fps (default) |
+| `e_view_dist_ratio` / `e_obj_view_dist_ratio` | `25` | Shorter draw distance — the big fps lever |
+| `e_terrain_lod_ratio` | `3` | Coarser terrain LOD at distance |
+| `e_vegetation_min_size` | `2` | Cull tiny vegetation |
+| `r_DetailTextures` | `0` | Drop detail-texture pass |
 
-**Performance presets:**
-- **Sharp (default):** `1792x1624` — ~72 fps standing, dips to mid-50s/60s in
-  heavy firefights.
-- **Smooth:** `1591x1440` — holds ~64–71 fps even in combat. Set `screenSize`
-  to `1591x1440` and `vr_winlatorxr_render_height` to `1440`.
+**Framerate:** the Quest is **draw-bound under Box64**, so cutting draw distance and
+detail (the block above) noticeably raises the frame rate at `1591x1440` with little
+visible cost. If you want maximum visual range instead, raise `e_view_dist_ratio` back
+toward `40`+ and set `vr_render_force_max_terrain_detail = 1` — expect lower fps.
+
+**Resolution presets:**
+- **Recommended:** `1591x1440` (`render_height 1440`) — holds ~60–72 fps in combat.
+- **Sharper, heavier:** `1792x1624` (`render_height 1624`) — crisper but dips into the
+  50s/60s in firefights. Do **not** exceed ~1792 wide (`1856+` crashes: 32-bit memory).
 
 Always play on **>50% battery** — the Quest power-throttles at low charge and
 tanks the frame rate regardless of settings.
