@@ -611,7 +611,7 @@ void VRManager::MirrorEyeToBackBuffer()
 
 	int eye = clamp_tpl(vr_mirrored_eye, 0, 1);
 
-	if (!m_d3d->device || !m_d3d->eyeTextures[eye] || m_pGame->IsInMenu())
+	if (!m_d3d->device || !m_d3d->eyeTextures[eye] || IsMenuActive())
 		return;
 
 	// figure out aspect ratio correction
@@ -1111,7 +1111,7 @@ void VRManager::ProcessInput()
 	if (!m_usingWinlatorXR && !gVRRenderer->ShouldRenderStereo())
 		vr::VROverlay()->HideOverlay(m_3DOverlay);
 
-	if ((m_pGame->IsInMenu() || m_pGame->GetSystem()->GetIConsole()->IsOpened()) && UseMotionControllers())
+	if ((IsMenuActive() || m_pGame->GetSystem()->GetIConsole()->IsOpened()) && UseMotionControllers())
 	{
 		if (!m_wasInMenu)
 		{
@@ -1283,7 +1283,7 @@ bool VRManager::IsDrivingVehicleInCinemaMode()
 void VRManager::ProcessRoomscale()
 {
 	CPlayer* player = m_pGame->GetLocalPlayer();
-	if (!player || m_pGame->IsCutSceneActive() || m_pGame->IsInMenu())
+	if (!player || m_pGame->IsCutSceneActive() || IsMenuActive())
 	{
 		m_skippedRoomscaleMovement = true;
 		return;
@@ -1785,7 +1785,7 @@ void VRManager::ComposeWinlatorXRFrame()
 	// Decide what this frame is. The back buffer currently holds whatever the engine rendered last:
 	// in VR mode that is the HUD over a transparent clear (the eyes live in m_d3d->eyeTextures),
 	// in the 2D modes (binoculars, scopes, cinema) it is the flat game image plus HUD.
-	bool inMenu = m_pGame->IsInMenu();
+	bool inMenu = IsMenuActive();
 	bool haveEyes = m_d3d->eyeTextures[0].Get() != nullptr && m_d3d->eyeTextures[1].Get() != nullptr;
 	bool vrWorld = !inMenu && haveEyes && gVRRenderer->ShouldRenderVR() && !gVRRenderer->ShouldRender2D();
 	bool stereoPlane = !inMenu && !vrWorld && gVRRenderer->ShouldRenderStereo() && m_d3d->stereoTexture.Get() != nullptr;
@@ -1962,7 +1962,7 @@ void VRManager::UpdateDesktopInputBlock()
 	if (!actionMaps)
 		return;
 
-	bool inMenu = m_pGame->IsInMenu() || m_pGame->GetSystem()->GetIConsole()->IsOpened();
+	bool inMenu = IsMenuActive() || m_pGame->GetSystem()->GetIConsole()->IsOpened();
 	bool shouldBlock = vr_winlatorxr_block_desktop_input != 0 && UseMotionControllers() && !inMenu;
 
 	if (shouldBlock)

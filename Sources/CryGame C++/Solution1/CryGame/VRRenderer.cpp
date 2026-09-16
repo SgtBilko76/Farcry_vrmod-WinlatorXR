@@ -330,7 +330,7 @@ bool VRRenderer::ShouldRenderStereo() const
 bool VRRenderer::UsePerEyeRenderTargets() const
 {
 	return gVR->IsUsingWinlatorXR() && !gVR->UseWinlatorAER()
-		&& ShouldRenderVR() && !ShouldRender2D() && !m_pGame->IsInMenu();
+		&& ShouldRenderVR() && !ShouldRender2D() && !gVR->IsMenuActive();
 }
 
 void VRRenderer::RenderSingleEye(int eye, ISystem* pSystem)
@@ -391,7 +391,7 @@ void VRRenderer::DrawCrosshair()
 		return;
 
 	// don't show crosshair if HUD is disabled (e.g. during cutscenes
-	if (m_pGame->cl_display_hud->GetIVal() == 0 || m_pGame->IsInMenu())
+	if (m_pGame->cl_display_hud->GetIVal() == 0 || gVR->IsMenuActive())
 		return;
 
 	CPlayer* pPlayer = m_pGame->GetLocalPlayer();
