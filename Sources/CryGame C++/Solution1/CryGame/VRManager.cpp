@@ -1535,7 +1535,7 @@ void VRManager::RegisterCVars()
 	IConsole* console = m_pGame->GetSystem()->GetIConsole();
 	console->Register("vr_yaw_deadzone_angle", &vr_yaw_deadzone_angle, 30, VF_DUMPTODISK, "Controls the deadzone angle in front of the player where weapon aim does not rotate the camera");
 	console->Register("vr_enable_motion_controllers", &vr_enable_motion_controllers, 1, VF_DUMPTODISK, "Enable this to use VR motion controllers instead of keyboard+mouse");
-	console->Register("vr_render_force_max_terrain_detail", &vr_render_force_max_terrain_detail, 1, VF_DUMPTODISK, "If enabled, will force terrain to render at max detail even in the distance");
+	console->Register("vr_render_force_max_terrain_detail", &vr_render_force_max_terrain_detail, 0, VF_DUMPTODISK, "If enabled, will force terrain to render at max detail even in the distance. Off by default on the Quest port: forcing max terrain detail everywhere measurably costs frames, and this device is draw-bound under Box64");
 	console->Register("vr_render_force_obj_draw_dist", &vr_render_force_obj_draw_dist, 0, VF_DUMPTODISK, "If enabled, will force objects and enemies to be drawn at much further distances (might result in rendering issues in some instances)");
 	console->Register("vr_window_width", &vr_window_width, 1920, VF_DUMPTODISK, "Configures the Far Cry desktop window width");
 	console->Register("vr_window_height", &vr_window_height, 1080, VF_DUMPTODISK, "Configures the Far Cry desktop window height");
