@@ -1,0 +1,49 @@
+# Normalise line endings. Text files are stored as LF in the repo and checked
+# out as LF on every platform, so a Windows checkout can no longer reintroduce
+# CRLF noise. Git auto-detects text vs binary (files with NUL bytes are left
+# untouched), and the explicit rules below cover types that could be misdetected.
+* text=auto eol=lf
+
+# Windows batch scripts run through cmd.exe inside the wine/Winlator container,
+# where CRLF is the safe, expected convention.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Shell scripts must stay LF regardless of platform.
+*.sh   text eol=lf
+
+# --- Binary: never normalise, never diff as text ---
+# Compiled / linker output
+*.dll  binary
+*.lib  binary
+*.exp  binary
+*.exe  binary
+*.res  binary
+*.8bi  binary
+*.mll  binary
+*.dlu  binary
+
+# CryEngine assets
+*.cgf  binary
+*.cga  binary
+*.caf  binary
+*.dds  binary
+*.tact binary
+
+# DCC scene files
+*.max  binary
+*.mb   binary
+
+# Images
+*.bmp  binary
+*.gif  binary
+*.jpg  binary
+*.jpeg binary
+*.png  binary
+*.ico  binary
+
+# Documents / archives / data
+*.pdf  binary
+*.zip  binary
+*.dat  binary
+*.db   binary
