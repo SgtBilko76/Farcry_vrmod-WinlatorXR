@@ -1759,8 +1759,32 @@ void VRManager::DrawHud(int eye, int x0Region, int halfWidth, int height)
 	// each eye, i.e. to the right in the left eye's image and to the left in the right eye's image
 	float shiftTan = (eye == 0 ? 1.f : -1.f) * 0.5f * m_winlatorEyeSeparation / distance;
 
-	float x0 = x0Region + halfWidth * (0.5f + (shiftTan - halfWidthTan) / (2.f * m_horizontalFov));
-	float x1 = x0Region + halfWidth * (0.5f + (shiftTan + halfWidthTan) / (2.f * m_horizontalFov));
+	// In-game pause menu: anchor the panel to the world yaw it was opened at, so it stays put in space as
+	// you turn (like the main menu) instead of being glued to your view. We only shift the horizontal
+	// screen position by the head-yaw change since it opened; WinlatorXR's rotational reprojection carries
+	// it the rest of the way to the display pose. The world (and per-eye render path) is untouched, so this
+	// avoids the crash-prone menu render path. Panel stays level (no pitch anchoring), matching the main menu.
+	float anchorTan = 0.f;
+	if (m_usingWinlatorXR && m_pGame->IsUIOverlay())
+	{
+		Ang3 headAngles;
+		headAngles.SetAnglesXYZ((Matrix33)m_hmdTransform);
+		float headYaw = headAngles.z;
+		if (!m_uiAnchored) { m_uiAnchorYaw = headYaw; m_uiAnchored = true; }
+		float dYaw = headYaw - m_uiAnchorYaw;
+		while (dYaw > gf_PI) dYaw -= 2.f * gf_PI;
+		while (dYaw < -gf_PI) dYaw += 2.f * gf_PI;
+		if (fabsf(dYaw) > 1.3f)   // panel is off to the side / behind: don't draw it wrapped by tan()
+			return;
+		anchorTan = tanf(dYaw);
+	}
+	else
+	{
+		m_uiAnchored = false;
+	}
+
+	float x0 = x0Region + halfWidth * (0.5f + (anchorTan + shiftTan - halfWidthTan) / (2.f * m_horizontalFov));
+	float x1 = x0Region + halfWidth * (0.5f + (anchorTan + shiftTan + halfWidthTan) / (2.f * m_horizontalFov));
 	float y0 = height * (0.5f - halfHeightTan / (2.f * m_verticalFov));
 	float y1 = height * (0.5f + halfHeightTan / (2.f * m_verticalFov));
 

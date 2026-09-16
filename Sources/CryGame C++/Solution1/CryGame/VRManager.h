@@ -145,6 +145,11 @@ private:
 	// draws the captured HUD for 'eye' into the frame region [x0, x0+width) x [0, height)
 	void DrawHud(int eye, int x0, int width, int height);
 	int m_winlatorAerEye = 0;
+	// In-game pause menu (IsUIOverlay) yaw anchoring: unlike the main menu we keep rendering the world in
+	// VR (so no crash-prone menu render path), but anchor the composited HUD/menu to the world yaw it was
+	// opened at, so it stays put as you turn your head instead of being glued to your view. See DrawHud.
+	bool m_uiAnchored = false;
+	float m_uiAnchorYaw = 0.f;
 
 	// WinlatorXR unconditionally emulates a mouse/keyboard from the controllers (trigger = left click,
 	// grip = right click, thumbstick up/down = mouse wheel, menu button = Esc, ...). Those events reach
