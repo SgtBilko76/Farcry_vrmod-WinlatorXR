@@ -235,10 +235,6 @@ public:
 	int WinlatorRenderScaleX() const { return (m_usingWinlatorXR && vr_winlatorxr_anamorphic != 0) ? 2 : 1; }
 
 	bool IsUsingWinlatorXR() const { return m_usingWinlatorXR; }
-	// True when the game is showing a menu we should present as a fixed flat panel rather than the
-	// head-locked in-world HUD: the frontend/main menu (IsInMenu) OR the in-game pause menu, which uses
-	// an exclusive UI overlay (IsUIOverlay, set only by InGameSingle.lua) and leaves IsInMenu() false.
-	bool IsMenuActive() const { return m_pGame->IsInMenu() || m_pGame->IsUIOverlay(); }
 	// The shared back buffer / present target under WinlatorXR is the whole X screen; each eye is
 	// rendered into the top-left GetRenderSize region of it, then captured and composited into its
 	// side-by-side half. This is only correct if the engine's main scene pass is actually confined to
