@@ -63,7 +63,7 @@ class IPhysicalWorld;
 struct IMemoryManager;
 struct ISoundSystem;
 struct IMusicSystem;
-struct XDOM::IXMLDOMDocument;
+namespace XDOM { struct IXMLDOMDocument; }
 struct IFrameProfileSystem;
 struct FrameProfiler;
 struct IStreamEngine;

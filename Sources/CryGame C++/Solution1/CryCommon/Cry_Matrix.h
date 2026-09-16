@@ -1438,14 +1438,8 @@ template<class F,int SI,int SJ> struct Matrix44_tpl {
 			M20=m.M20;		M21=m.M21;		M22=m.M22;	M23=m.M23;
 			M30=m.M30;		M31=m.M31;		M32=m.M32;	M33=m.M33;
 		}
-		ILINE friend Matrix44_tpl<F,SI,SJ> GetTransposed44( const Matrix44_tpl<F,SI,SJ>& m ) {
-			Matrix44_tpl<F,SI,SJ> dst;
-			dst.M00=m.M00;	dst.M01=m.M10;	dst.M02=m.M20;	dst.M03=m.M30;
-			dst.M10=m.M01;	dst.M11=m.M11;	dst.M12=m.M21;	dst.M13=m.M31;
-			dst.M20=m.M02;	dst.M21=m.M12;	dst.M22=m.M22;	dst.M23=m.M32;
-			dst.M30=m.M03;	dst.M31=m.M13;	dst.M32=m.M23;	dst.M33=m.M33;
-			return dst;
-		}
+		// GetTransposed44 moved to namespace scope (below the class) so clang finds it by ordinary lookup
+		// when called with a convertible argument (e.g. a Matrix33); it only uses public members.
 
 
 		/*!
@@ -1683,11 +1677,27 @@ template<class F,int SI,int SJ> struct Matrix44_tpl {
 		M20=0.0f;	M21=0.0f;	M22=1.0f;	M23=0.0f;
 		M30=v.x;	M31=v.y;	M32=v.z;	M33=1.0f;
 	}
-	ILINE friend Matrix44_tpl<F,4,1> GetTranslationMat( const Vec3_tpl<F>& v  ) {
-		Matrix44_tpl<F,4,1> m; m.SetTranslationMat(v); return m;
-	}
+	// GetTranslationMat moved to namespace scope (below the class) - see note above.
 
 };
+
+// These were hidden friends of Matrix44_tpl. clang only finds hidden friends via ADL, but they are
+// called with arguments that aren't Matrix44 (a Matrix33, a Vec3), so ordinary lookup is required.
+// They use only public members, so defining them as free function templates works on MSVC and clang.
+template<class F,int SI,int SJ>
+ILINE Matrix44_tpl<F,SI,SJ> GetTransposed44( const Matrix44_tpl<F,SI,SJ>& m ) {
+	Matrix44_tpl<F,SI,SJ> dst;
+	dst.M00=m.M00;	dst.M01=m.M10;	dst.M02=m.M20;	dst.M03=m.M30;
+	dst.M10=m.M01;	dst.M11=m.M11;	dst.M12=m.M21;	dst.M13=m.M31;
+	dst.M20=m.M02;	dst.M21=m.M12;	dst.M22=m.M22;	dst.M23=m.M32;
+	dst.M30=m.M03;	dst.M31=m.M13;	dst.M32=m.M23;	dst.M33=m.M33;
+	return dst;
+}
+
+template<class F>
+ILINE Matrix44_tpl<F,4,1> GetTranslationMat( const Vec3_tpl<F>& v ) {
+	Matrix44_tpl<F,4,1> m; m.SetTranslationMat(v); return m;
+}
 
 
 //////////////////////////////////////////////////////////////////////

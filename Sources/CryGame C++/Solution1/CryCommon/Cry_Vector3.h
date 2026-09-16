@@ -316,10 +316,10 @@ typedef Vec3_f64 vectorr;
 typedef Vec3_tpl<int>		vectori;
 
 
-inline Vec3_tpl<f32>::Vec3_tpl(type_min) { x=y=z=-3.3E38f; }
-inline Vec3_tpl<f32>::Vec3_tpl(type_max) { x=y=z=3.3E38f; }
-inline Vec3_tpl<f64>::Vec3_tpl(type_min) { x=y=z=-1.7E308; }
-inline Vec3_tpl<f64>::Vec3_tpl(type_max) { x=y=z=1.7E308; }
+template<> inline Vec3_tpl<f32>::Vec3_tpl(type_min) { x=y=z=-3.3E38f; }
+template<> inline Vec3_tpl<f32>::Vec3_tpl(type_max) { x=y=z=3.3E38f; }
+template<> inline Vec3_tpl<f64>::Vec3_tpl(type_min) { x=y=z=-1.7E308; }
+template<> inline Vec3_tpl<f64>::Vec3_tpl(type_max) { x=y=z=1.7E308; }
 
 template<class F> 
 ILINE F GetLengthSquared( const Vec3_tpl<F> &v ) { return v.x*v.x + v.y*v.y + v.z*v.z; }
@@ -672,6 +672,11 @@ struct Plane
 		return i - n * (2.f * ((n|i) - d));
 	}
 };
+
+// GetPlane is a hidden friend of struct Plane but is called with Vec3 arguments, so ADL can't reach it.
+// clang (unlike MSVC) needs a matching namespace-scope declaration for ordinary lookup to find it.
+inline Plane GetPlane( const Vec3 &normal, const Vec3 &point );
+inline Plane GetPlane( const Vec3 &v0, const Vec3 &v1, const Vec3 &v2 );
 
 
 //////////////////////////////////////////////////////////////////////

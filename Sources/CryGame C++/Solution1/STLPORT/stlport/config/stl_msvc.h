@@ -20,6 +20,25 @@
 #  define _STLP_NATIVE_CPP_RUNTIME_HEADER(header) <../include/##header>
 # endif
 
+// clang's preprocessor mangles the `<../include/##x>` token paste above (the invalid ## paste
+// corrupts the header name, e.g. climits -> "..\climits."). clang substitutes macro parameters
+// without needing ##, so redefine these native-header shims without the paste when building with
+// clang-cl (Linux cross build). Resolves against the MSVC/UCRT include dirs the same way.
+# if defined(__clang__)
+#  undef _STLP_NATIVE_HEADER
+#  undef _STLP_NATIVE_C_HEADER
+#  undef _STLP_NATIVE_UCRT_HEADER
+#  undef _STLP_NATIVE_CPP_C_HEADER
+#  undef _STLP_NATIVE_OLD_STREAMS_HEADER
+#  undef _STLP_NATIVE_CPP_RUNTIME_HEADER
+#  define _STLP_NATIVE_HEADER(x) <../include/x>
+#  define _STLP_NATIVE_C_HEADER(x) <../include/x>
+#  define _STLP_NATIVE_UCRT_HEADER(x) <../ucrt/x>
+#  define _STLP_NATIVE_CPP_C_HEADER(x) <../include/x>
+#  define _STLP_NATIVE_OLD_STREAMS_HEADER(x) <../include/x>
+#  define _STLP_NATIVE_CPP_RUNTIME_HEADER(header) <../include/header>
+# endif
+
 # define _STLP_CALL __cdecl
 
 # ifndef _STLP_LONG_LONG

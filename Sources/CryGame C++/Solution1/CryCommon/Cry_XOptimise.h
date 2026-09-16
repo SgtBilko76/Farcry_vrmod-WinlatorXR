@@ -60,7 +60,7 @@ inline float Ffabs(float x) { return fabsf(x); }
 #endif
 
 //////////////////////////////////////////////////////////////////////
-#if defined(_CPU_X86) && !defined(LINUX)
+#if defined(_CPU_X86) && !defined(LINUX) && !defined(__clang__)
 inline int fastftol_positive(float f)
 {
   int i;
@@ -74,7 +74,7 @@ inline int fastftol_positive (float x) { return (int)x; }
 #endif
 
 
-#if defined(_CPU_X86) && !defined(LINUX)
+#if defined(_CPU_X86) && !defined(LINUX) && !defined(__clang__)
 ILINE int __fastcall FtoI(float  x)
 {
   int	   t;
@@ -320,7 +320,7 @@ inline float cryISqrtf(float fVal)
   fVal = (1.5f - (fVal * 0.5f) * *n2 * *n2) * *n2;
   return fVal;
 }
-#if defined _CPU_X86 && !defined(LINUX)
+#if defined _CPU_X86 && !defined(LINUX) && !defined(__clang__)
 //////////////////////////////////////////////////////////////////////
 inline void cryPrecacheSSE(const void *src, int nbytes)
 {
@@ -448,7 +448,7 @@ ILINE void cryPrefetchT0SSE(const void *src)
 // getting maximum read bandwidth, especially in DDR memory systems.
 
 
-#if defined _CPU_X86 && !defined(LINUX)
+#if defined _CPU_X86 && !defined(LINUX) && !defined(__clang__)
 // Inline assembly syntax for use with Visual C++
 inline void cryMemcpy( void* Dst, const void* Src, int Count )
 {
@@ -2476,7 +2476,7 @@ ILINE void cryMemcpy( void* Dst, const void* Src, INT n, int nFlags )
 //////////////////////////////////////////////////////////////////////
 inline void mathTransformVec3fN(float *pOut, float *pIn, float *matrix, int nV, int OptFlags)
 {
-#if defined _CPU_X86 && !defined(LINUX)
+#if defined _CPU_X86 && !defined(LINUX) && !defined(__clang__)
 	// TODO: AMD64 port: NEED TO IMPLEMENT!!!
 	int i;
   if (OptFlags & CPUF_3DNOW)
@@ -2513,7 +2513,7 @@ inline void mathTransformVec3fN(float *pOut, float *pIn, float *matrix, int nV, 
 //////////////////////////////////////////////////////////////////////
 inline void mathTransformVec3f(float *pOut, float *pIn, float *matrix, int nV, int OptFlags)
 {
-#if defined(_CPU_X86) && !defined(LINUX)
+#if defined(_CPU_X86) && !defined(LINUX) && !defined(__clang__)
 	int i;
 	// TODO: AMD64 port: NEED TO IMPLEMENT!!!
   if (OptFlags & CPUF_3DNOW)
@@ -2550,7 +2550,7 @@ inline void mathTransformVec3f(float *pOut, float *pIn, float *matrix, int nV, i
 //////////////////////////////////////////////////////////////////////
 inline void mathMatrixInverse(float *pOut, float *pIn, int OptFlags)
 {
-#if defined(_CPU_X86) && !defined(LINUX)
+#if defined(_CPU_X86) && !defined(LINUX) && !defined(__clang__)
 	// TODO: AMD64 port: NEED TO IMPLEMENT!!!
   if (OptFlags & CPUF_3DNOW)
     invertMatrixf_3DNow(pOut, pIn);
@@ -2565,7 +2565,7 @@ inline void mathMatrixInverse(float *pOut, float *pIn, int OptFlags)
 //////////////////////////////////////////////////////////////////////
 inline void mathMatrixMultiply(float *pOut, float *pM1, float *pM2, int OptFlags)
 {
-#if defined _CPU_X86 && !defined(LINUX)
+#if defined _CPU_X86 && !defined(LINUX) && !defined(__clang__)
   if (OptFlags & CPUF_3DNOW)
     multMatrixf_3DNow(pOut, pM1, pM2);
   else
@@ -2579,7 +2579,7 @@ inline void mathMatrixMultiply(float *pOut, float *pM1, float *pM2, int OptFlags
 //////////////////////////////////////////////////////////////////////
 inline void mathMatrixTranspose(float *pOut, float *pIn, int OptFlags)
 {
-#if defined _CPU_X86 && !defined(LINUX)
+#if defined _CPU_X86 && !defined(LINUX) && !defined(__clang__)
 	// TODO: AMD64 port: NEED TO IMPLEMENT!!!
   if (OptFlags & CPUF_3DNOW)
     transposeMatrixf_3DNow(pOut, pIn);
