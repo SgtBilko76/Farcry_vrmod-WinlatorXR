@@ -1,5 +1,8 @@
 # Far Cry VR Mod
 
+[![Sponsor](https://img.shields.io/badge/Sponsor-SgtBilko76-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/SgtBilko76)
+
+
 ![Title](title.jpg)
 
 This is a mod for the 2004 Crytek game *Far Cry* which makes it possible to experience it in Virtual Reality.
