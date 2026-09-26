@@ -90,26 +90,36 @@ boot — if it reads as off-face, the Quest suspends the app and it freezes.
 | Setting | Value | Notes |
 |---|---|---|
 | `vr_winlatorxr_aer` | `1` | **Alternate-eye rendering** — full resolution per eye |
-| `vr_winlatorxr_render_height` | `1440` | Pair with the `1591` screen |
+| `vr_winlatorxr_render_height` | `1624` | Pair with the `1792` screen |
+| screen (`.desktop`) | `1792x1624` | Recommended preset (**needs the LAA patch**, below) |
 | `vr_seated_mode` | `1` | Comfortable; crouch with the button, not physically |
 | `vr_height_offset` | `0.30` | Eye-height tweak (metres). Adjust to taste |
 | `vr_snap_turn_amount` | `45` | 45° snap turn |
-| screen (`.desktop`) | `1591x1440` | Recommended preset |
 | `vr_render_force_max_terrain_detail` | `0` | Off = coarser distant terrain, better fps (default) |
-| `e_view_dist_ratio` / `e_obj_view_dist_ratio` | `25` | Shorter draw distance — the big fps lever |
-| `e_terrain_lod_ratio` | `3` | Coarser terrain LOD at distance |
+| `e_view_dist_ratio` / `e_obj_view_dist_ratio` | `50` | Draw distance (far sight) |
+| `e_terrain_lod_ratio` | `1.5` | Terrain LOD at distance |
 | `e_vegetation_min_size` | `2` | Cull tiny vegetation |
+| `e_detail_distance` | `6` | Detail-geometry distance |
 | `r_DetailTextures` | `0` | Drop detail-texture pass |
+| `e_shadow_maps_view_dist_ratio` | `4` | Draw shadows closer (big fps saving) |
+| `e_particles_max_count` | `4096` | Particle cap |
 
-**Framerate:** the Quest is **draw-bound under Box64**, so cutting draw distance and
-detail (the block above) noticeably raises the frame rate at `1591x1440` with little
-visible cost. If you want maximum visual range instead, raise `e_view_dist_ratio` back
-toward `40`+ and set `vr_render_force_max_terrain_detail = 1` — expect lower fps.
+**Large-address-aware patch (required for the 1792 preset).** Far Cry's launcher is a
+32-bit exe capped at 2 GB, which is what makes `1856+` crash and what used to make `1792`
+dip. **Patch `Bin32/FarCry.exe` to be large-address-aware** (set the PE
+`IMAGE_FILE_LARGE_ADDRESS_AWARE` bit — e.g. NTCore's *4GB Patch*, or `editbin
+/LARGEADDRESSAWARE`). With that, `1792x1624` holds a **locked 72 fps**. Keep a backup of
+the original exe. If you don't patch it, use the **1591x1440** preset (no patch needed).
+
+**Framerate:** the Quest is **draw/CPU-bound under Box64**. Trimming shadows and detail
+(the block above) frees enough headroom that the LAA-patched `1792` preset stays pegged at
+72 fps. Water reflections are kept on (they render correctly in AER).
 
 **Resolution presets:**
-- **Recommended:** `1591x1440` (`render_height 1440`) — holds ~60–72 fps in combat.
-- **Sharper, heavier:** `1792x1624` (`render_height 1624`) — crisper but dips into the
-  50s/60s in firefights. Do **not** exceed ~1792 wide (`1856+` crashes: 32-bit memory).
+- **Recommended:** `1792x1624` (`render_height 1624`) — **locked 72 fps** *with the LAA
+  patch + shadow trims above*.
+- **No-patch fallback:** `1591x1440` (`render_height 1440`) — ~60–72 fps, runs without the
+  LAA patch. Do **not** exceed ~1792 wide even patched — higher is GPU-bound and crawls.
 
 Always play on **>50% battery** — the Quest power-throttles at low charge and
 tanks the frame rate regardless of settings.
