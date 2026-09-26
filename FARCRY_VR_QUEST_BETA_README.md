@@ -14,12 +14,10 @@ Play **Far Cry (2004)** in VR **standalone on a Meta Quest 3**, via the
 ## What you need
 
 1. **Meta Quest 3** (should also work on Quest 2/Pro; only Quest 3 is tested).
-2. **WinlatorXR** — a public build works (tested on **`cats-27`** and the
-   **public v27** release). The mod now forces the game window borderless at
-   (0,0) itself, so decorated/offset windows on public builds no longer break
-   the stereo pipeline.
-   - ⚠️ **Avoid the `dawn-24` / Turnip build** — it renders the game as a flat
-     doubled image and crashes.
+2. **WinlatorXR** — current builds work well, including the newer **`dawn`** line
+   (also tested on `cats-27` / public v27). The mod forces the game window
+   borderless at (0,0) itself, so decorated/offset windows on current/public
+   builds no longer break the stereo pipeline.
 3. A **Far Cry (2004) install** — a legitimate copy (e.g. the DRM-free Steam
    build). You provide your own game files.
 4. This release bundle:
@@ -34,10 +32,11 @@ Play **Far Cry (2004)** in VR **standalone on a Meta Quest 3**, via the
 
 ## Install
 
-### 1. Install WinlatorXR (cats-27)
-Sideload the `cats-27` APK:
+### 1. Install WinlatorXR
+Sideload a current WinlatorXR build (the newer `dawn` line works well; `cats-27` /
+public v27 also work):
 ```
-adb install -r WinlatorXR-cats-27.apk
+adb install -r WinlatorXR-<build>.apk
 ```
 On first launch, **grant all permissions**, especially **All files access**
 (Settings → Apps → WinlatorXR → Permissions → Files) — the game and config live
@@ -162,8 +161,8 @@ tanks the frame rate regardless of settings.
   composite rate; some may notice slight motion softness on fast head turns.
 - **WinlatorXR container backup/export** is unreliable — hence these manual
   setup steps rather than a prefix image.
-- Avoid the **dawn-24 / Turnip** build (flat/doubled + crashes). cats-27 and the
-  public v27 both work.
+- Works on current WinlatorXR builds, including the newer **dawn** line (as well as
+  cats-27 / public v27). Very old builds may render flat/doubled — update if so.
 
 ---
 
@@ -172,8 +171,8 @@ tanks the frame rate regardless of settings.
 | Symptom | Fix |
 |---|---|
 | Image **squeezed/stretched** | Screen size isn't ~1.10 aspect — use `1792x1624` or `1591x1440` |
-| **No stereo / no head tracking** (flat, frozen view) | The window must be borderless at (0,0) so WinlatorXR finds the sync pixel — the mod forces this automatically; if it persists, relaunch. Avoid the dawn-24/Turnip build. |
-| **Doubled** flat image (both eyes side by side) | Wrong WinlatorXR build (dawn-24) — use cats-27 or public v27 |
+| **No stereo / no head tracking** (flat, frozen view) | The window must be borderless at (0,0) so WinlatorXR finds the sync pixel — the mod forces this automatically; if it persists, relaunch. |
+| **Doubled** flat image (both eyes side by side) | Very old WinlatorXR build — update to a current build (dawn / cats-27 / v27) |
 | Freezes on a static frame | Headset read as off-face — put it on; the app was suspended |
 | Very low fps everywhere | Battery low (throttling) — charge to >50% |
 | `D:\FarCry` not found / won't launch | Container `D:` drive isn't mapped to `/sdcard/Download` |
