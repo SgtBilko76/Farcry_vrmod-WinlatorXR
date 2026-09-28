@@ -145,16 +145,13 @@ tanks the frame rate regardless of settings.
 
 ## Known issues (beta)
 
-- **Main menu is unstable — leave the auto-load ON.** The game's packed
-  frontend crashes on this build (attract-mode / map-load null-deref in
-  `XRenderD3D9.dll`), so the main menu isn't reliable to navigate. The included
-  `Mods/CryVR/Scripts/MenuScreens/MainScreen.lua` **auto-loads straight into
-  Training** and is **enabled by default** — keep it. For save/load/options,
-  use the **in-game pause menu** (stable), not the main menu. To restore the
-  main menu, delete that file — but expect it to crash within a couple minutes.
-- **Some map loads can crash** (`XRenderD3D9` null-read) — most often via the
-  menu/demoloop path. Auto-loading directly into your target level avoids it;
-  Training loads reliably.
+- **Boots to the main menu.** On current WinlatorXR builds the main menu is stable,
+  so the game starts there normally (the old auto-load-into-Training bypass has been
+  removed). Start a new game or load a save from the menu.
+- **Some map loads can crash intermittently** (`XRenderD3D9.dll` null-read at
+  `+0x647B4`) — this is in the game's closed D3D9 renderer under dxvk/Box64, not the
+  mod. It's occasional; **just relaunch and load again** — it almost always gets
+  through on the next try.
 - **Resolution ceiling ~1792 wide.** `1856+` crashes (32-bit memory). Keep the
   ~1.10 aspect (e.g. `1792x1624` or `1591x1440`).
 - **AER** gives full per-eye resolution but each eye refreshes at half the
@@ -176,7 +173,7 @@ tanks the frame rate regardless of settings.
 | Freezes on a static frame | Headset read as off-face — put it on; the app was suspended |
 | Very low fps everywhere | Battery low (throttling) — charge to >50% |
 | `D:\FarCry` not found / won't launch | Container `D:` drive isn't mapped to `/sdcard/Download` |
-| Crash on the main menu / some map loads | Expected on this build — keep the auto-load-into-Training script and use the in-game pause menu |
+| Crash while loading a level | Intermittent `XRenderD3D9` renderer crash (dxvk/Box64) — just relaunch and load again |
 
 ---
 
