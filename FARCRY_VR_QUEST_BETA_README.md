@@ -1,5 +1,7 @@
 # Far Cry VR — Meta Quest 3 (Standalone) — BETA
 
+**Download, install guide, controls and pictures: [portroyale.online/farcry.html](https://portroyale.online/farcry.html)**
+
 Play **Far Cry (2004)** in VR **standalone on a Meta Quest 3**, via the
 [`farcry_vrmod`](https://github.com/fholger/farcry_vrmod) mod running under
 **WinlatorXR** (Wine + Box64 + DXVK on Android). No PC needed at runtime.
