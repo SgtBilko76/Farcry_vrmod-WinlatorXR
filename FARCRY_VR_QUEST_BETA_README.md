@@ -127,6 +127,8 @@ tanks the frame rate regardless of settings.
 
 ## Controls (Touch controllers)
 
+![Far Cry VR controller mapping](docs/controls.webp)
+
 | Input | Action |
 |---|---|
 | Right trigger | Fire |
